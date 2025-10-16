@@ -1,0 +1,28 @@
+# Requirements for XAU Bot
+
+# Core dependencies
+requests
+pandas
+numpy
+MetaTrader5
+
+# For environment variables
+python-dotenv
+
+# For news analysis (if using NLP)
+nltk
+
+# For logging
+logging
+
+matplotlib
+ta
+ccxt
+aiohttp
+beautifulsoup4
+textblob
+
+# Phase 5 dependencies (ensure these are installed)
+# pandas and numpy already included above
+# MetaTrader5 already included above
+
