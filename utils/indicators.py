@@ -6,15 +6,31 @@ def atr(df, period=14):
     Average True Range (ATR)
     df: DataFrame must contain 'high','low','close'
     """
+    if len(df) < period + 1:
+        # Return series with NaN values if not enough data
+        return pd.Series([np.nan] * len(df), index=df.index)
+    
     high = df['high']
     low = df['low']
     close = df['close']
+    
+    # Calculate True Range components
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
+    
+    # Get the maximum of the three TR components
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period).mean()
-    return atr
+    
+    # Calculate ATR with NaN protection
+    atr_values = tr.rolling(window=period).mean()
+    
+    # Fill NaN values with a reasonable default (0.1% of current price)
+    if len(atr_values) > 0:
+        default_atr = close.iloc[-1] * 0.001  # 0.1% of current price
+        atr_values = atr_values.fillna(default_atr)
+    
+    return atr_values
 
 def dynamic_rr_ratio(signal_strength, atr_value, news_sentiment, trend_strength, rsi_condition, position_type):
     """

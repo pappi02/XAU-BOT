@@ -60,7 +60,7 @@ POSITION_SIZE_PCT = 0.5  # Position size as percentage of balance
 LOG_LEVEL = 'INFO'
 
 # Trading / risk settings for Phase 5
-TRADE_ACCOUNT_MODE = "demo"        # "demo" or "live"
+TRADE_ACCOUNT_MODE = "live"        # "demo" or "live"
 SYMBOL_PHASE5 = "XAUUSDm" if TRADE_ACCOUNT_MODE == "demo" else "XAUUSDm"  # Use micro lot for demo, standard for live
 CONTRACT_SIZE = 100.0              # common: 100 oz per standard lot (change to broker contract)
 LEVERAGE_PHASE5 = 400               # leverage used (1:400)
@@ -131,6 +131,32 @@ CORRELATION_THRESHOLD = 0.7        # Correlation coefficient threshold
 # 13. Trend Reversal
 TREND_REVERSAL_CLOSE = True        # Close on detected trend reversals
 
+# ===== BREAK-EVEN STOP LOSS SETTINGS =====
+BREAK_EVEN_ENABLED = True          # Enable break-even SL functionality
+BREAK_EVEN_PROFIT_PIPS = 10        # Profit in pips before moving SL to break-even
+BREAK_EVEN_BUFFER_PIPS = 2         # Buffer pips above entry for break-even SL
+
+# ===== TRAILING STOP SETTINGS =====
+TRAILING_STOP_MODIFICATION = True  # Enable trailing stop as SL modification (not close)
+TRAILING_STOP_ACTIVATION_PIPS = 10 # Pips profit before trailing starts
+TRAILING_STOP_DISTANCE_PIPS = 5    # Distance to trail behind price
+
+# ===== PARTIAL CLOSE SETTINGS =====
+PARTIAL_CLOSE_ENABLED = True       # Enable partial close functionality
+PARTIAL_CLOSE_LEVELS = [           # Profit levels for partial closes (pips, percentage)
+    {'profit_pips': 20, 'close_percentage': 0.25},  # Close 25% at 20 pips profit
+    {'profit_pips': 40, 'close_percentage': 0.25},  # Close another 25% at 40 pips
+    {'profit_pips': 60, 'close_percentage': 0.25},  # Close another 25% at 60 pips
+]
+PARTIAL_CLOSE_MIN_VOLUME = 0.01    # Minimum volume to leave after partial close
+
+# ===== ENHANCED SIGNAL EXIT SETTINGS =====
+ENHANCED_SIGNAL_EXIT = True        # Enable enhanced signal-based exits
+SIGNAL_EXIT_STRENGTH_DROP = 30    # Close if signal strength drops by this percentage
+SIGNAL_EXIT_OPPOSITE_THRESHOLD = 70 # Minimum strength for opposite signal exit
+SIGNAL_EXIT_WEAKENING_WINDOW = 5  # Candles to check for signal weakening
+TREND_REVERSAL_STRENGTH = 80      # Minimum strength for trend reversal exit
+
 # Dynamic Lot Sizing Configuration
 DYNAMIC_LOT_SIZING_ENABLED = True  # Enable dynamic lot sizing adjustments
 
@@ -180,5 +206,85 @@ DEFAULT_RISK_MODE = "balanced"      # "aggressive", "balanced", "conservative"
 # Lot Size Limits
 MIN_LOT_SIZE = 0.01                # Minimum allowed lot size
 MAX_LOT_SIZE = 5.0                 # Maximum allowed lot size
+
+# ===== PHASE 7: MULTI-TIMEFRAME CONFLUENCE SETTINGS =====
+MULTI_TIMEFRAME_ENABLED = True     # Enable multi-timeframe analysis
+
+# Timeframe Configuration
+ANALYSIS_TIMEFRAMES = {
+    'M1': {'mt5_constant': 1, 'weight': 0.1, 'description': 'Entry timing'},
+    'M5': {'mt5_constant': 5, 'weight': 0.15, 'description': 'Short-term trend'},
+    'M15': {'mt5_constant': 15, 'weight': 0.2, 'description': 'Medium-term direction'},
+    'M30': {'mt5_constant': 30, 'weight': 0.25, 'description': 'Volatility filter'},
+    'H1': {'mt5_constant': 16385, 'weight': 0.15, 'description': 'Trend validation'},
+    'H4': {'mt5_constant': 16388, 'weight': 0.15, 'description': 'Macro bias'}
+}
+
+# Confluence Thresholds
+MIN_CONFLUENCE_FOR_TRADE = 0.7     # Minimum confluence score for trade entry (0-1)
+STRONG_CONFLUENCE_THRESHOLD = 0.8  # Strong signal threshold
+MAJORITY_AGREEMENT_RATIO = 0.6     # Minimum ratio of timeframes agreeing on direction
+
+# Multi-Timeframe Analysis Settings
+CANDLE_MULTIPLIER = {              # Multiplier for candle count per timeframe
+    'M1': 1, 'M5': 1, 'M15': 2, 'M30': 3, 'H1': 4, 'H4': 6
+}
+
+# News Integration
+NEWS_IMPACT_ENABLED = True         # Enable news sentiment impact on confluence
+NEWS_MULTIPLIERS = {
+    'bullish': 1.1,                 # Boost bullish signals
+    'bearish': 0.9,                 # Dampen bearish signals
+    'neutral': 1.0                  # No change
+}
+
+# Volatility Filtering
+VOLATILITY_FILTER_ENABLED = True   # Enable volatility-based filtering
+HIGH_VOLATILITY_THRESHOLD = 0.7    # High volatility threshold (0-1)
+LOW_VOLATILITY_THRESHOLD = 0.3     # Low volatility threshold (0-1)
+HIGH_VOLATILITY_MULTIPLIER = 0.9   # Reduce confidence in high volatility
+LOW_VOLATILITY_MULTIPLIER = 1.1    # Increase confidence in low volatility
+
+# Dynamic Position Sizing (Confluence-Based)
+CONFLUENCE_LOT_MULTIPLIER = True   # Enable lot sizing based on confluence
+BASE_LOT_SIZE = 0.01               # Base lot size
+CONFLUENCE_LOT_RANGE = (0.5, 1.0)  # Lot multiplier range based on confluence (0.5-1.0)
+
+# Risk-Reward Ratios (Confluence-Based)
+STRONG_SIGNAL_RR = 3.0             # RR ratio for strong confluence (>= 0.8)
+MODERATE_SIGNAL_RR = 2.0           # RR ratio for moderate confluence (0.7-0.8)
+WEAK_SIGNAL_RR = 1.5               # RR ratio for weak signals (< 0.7)
+
+# ATR-Based Stop Loss
+ATR_SL_MULTIPLIER = 1.5            # ATR multiplier for stop loss distance
+ATR_PERIOD_CONFLUENCE = 14         # ATR period for confluence analysis
+
+# Signal-Driven Execution
+SIGNAL_DRIVEN_TRADING = True       # Enable signal-driven vs time-triggered trading
+ANALYSIS_INTERVAL_SECONDS = 60     # Analysis interval (every 60 seconds)
+MAX_ANALYSIS_RETRIES = 3           # Maximum retries for failed analysis
+
+# Confluence Dashboard Settings
+CONFLUENCE_MATRIX_ENABLED = True   # Enable confluence matrix display
+OVERALL_BIAS_DISPLAY = True        # Show overall market bias
+TRADE_HISTORY_LENGTH = 5           # Number of recent trades to display
+DYNAMIC_LOT_HISTORY = True         # Show dynamic lot adjustment history
+
+# ===== PHASE 10: SMART EXIT MANAGEMENT & TRADE OPTIMIZATION =====
+EXIT = {
+    "TRAILING_ENABLED": True,
+    "TRAILING_STEP_PTS": 50,         # points/price-units (adjust per symbol)
+    "TRAILING_START_PTS": 30,        # start trailing after this profit
+    "PARTIAL_CLOSE_ENABLED": True,
+    "PARTIAL_CLOSE_AT_PTS": [30, 80], # 1st and 2nd partial close profit levels
+    "PARTIAL_CLOSE_PERCENTS": [0.5, 0.5], # fractions of remaining volume to close
+    "BREAKEVEN_TRIGGER_PTS": 20,     # move SL to breakeven after this profit
+    "TIME_BASED_EXIT_MINUTES": 240,  # optional: max hold time
+    "VOLATILITY_SPIKE_MULTIPLIER": 2.5, # if ATR > multiplier * entry_atr -> consider close
+    "NEWS_CLOSE_BEFORE_MIN": 10,     # minutes before high-impact news to close positions
+    "CLOSE_ON_OPPOSITE_SIGNAL": True,
+    "MIN_PROFIT_TO_PARTIAL": 5,      # minimum profit to trigger partial (avoid tiny choppy closes)
+    "MAX_DRAWDOWN_PERCENT_CLOSE_ALL": 0.2, # 20% daily drawdown triggers close all
+}
 
 

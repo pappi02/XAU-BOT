@@ -1,277 +1,218 @@
-import sqlite3
-import logging
+# trade_logger.py
+import os
+import csv
+import json
 from datetime import datetime
-from typing import Dict, List, Optional
+import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
+
+LOG_DIR = "logs"
+TRADE_LOG_FILE = os.path.join(LOG_DIR, "trade_log.csv")
+PARTIAL_LOG_FILE = os.path.join(LOG_DIR, "partials.json")
+EXIT_LOG_FILE = os.path.join(LOG_DIR, "exit_log.csv")
+SIGNAL_LOG_FILE = os.path.join(LOG_DIR, "signal_log.jsonl")  # jsonlines for easy appends
+
+# Ensure log folder exists
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# CSV headers
+TRADE_FIELDS = [
+    "ticket", "symbol", "type", "volume", "price_open", "sl", "tp",
+    "entry_time", "signal_strength", "entry_atr", "rr_ratio",
+    "entry_reason", "status"
+]
+
+EXIT_FIELDS = [
+    "ticket", "symbol", "exit_time", "exit_reason", "profit", "duration_minutes"
+]
 
 class TradeLogger:
-    """
-    Persistent trade logging using SQLite database.
-    Logs all trades, positions, and P&L for analysis and dashboard.
-    """
+    def __init__(self):
+        pass
 
-    def __init__(self, db_path: str = "trades.db"):
-        self.db_path = db_path
-        self._init_db()
+    def log_trade(self, entry_data: dict):
+        """Logs a newly opened trade to CSV."""
+        if not os.path.exists(TRADE_LOG_FILE):
+            with open(TRADE_LOG_FILE, "w", newline="") as f:
+                csv.DictWriter(f, fieldnames=TRADE_FIELDS).writeheader()
 
-    def _init_db(self):
-        """Initialize the database and create tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+        entry_data["entry_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        entry_data["status"] = "OPEN"
 
-            # Trades table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,  -- BUY or SELL
-                    entry_price REAL NOT NULL,
-                    exit_price REAL,
-                    volume REAL NOT NULL,
-                    stop_loss REAL,
-                    take_profit REAL,
-                    pnl REAL,
-                    status TEXT NOT NULL,  -- OPEN, CLOSED, CANCELLED
-                    strategy TEXT,
-                    notes TEXT
-                )
-            ''')
+        with open(TRADE_LOG_FILE, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=TRADE_FIELDS)
+            writer.writerow(entry_data)
 
-            # Positions table for current open positions
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS positions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    trade_id INTEGER,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    entry_price REAL NOT NULL,
-                    current_price REAL,
-                    volume REAL NOT NULL,
-                    stop_loss REAL,
-                    take_profit REAL,
-                    unrealized_pnl REAL,
-                    timestamp TEXT NOT NULL,
-                    FOREIGN KEY (trade_id) REFERENCES trades (id)
-                )
-            ''')
+        logger.info(f"📝 Logged new trade: {entry_data}")
+        return True
 
-            # Daily P&L table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS daily_pnl (
-                    date TEXT PRIMARY KEY,
-                    total_pnl REAL DEFAULT 0,
-                    total_trades INTEGER DEFAULT 0,
-                    winning_trades INTEGER DEFAULT 0,
-                    losing_trades INTEGER DEFAULT 0
-                )
-            ''')
+    def log_exit(self, ticket, reason, profit=0.0, symbol=None):
+        """Logs trade exit details."""
+        exit_time = datetime.utcnow()
+        duration = None
 
-            conn.commit()
+        # Try reading entry time from trade log
+        try:
+            df = pd.read_csv(TRADE_LOG_FILE)
+            row = df.loc[df["ticket"] == ticket]
+            if not row.empty:
+                entry_time = datetime.strptime(row.iloc[-1]["entry_time"], "%Y-%m-%d %H:%M:%S")
+                duration = (exit_time - entry_time).total_seconds() / 60
+                df.loc[df["ticket"] == ticket, "status"] = "CLOSED"
+                df.to_csv(TRADE_LOG_FILE, index=False)
+        except Exception as e:
+            logger.warning(f"Couldn't update trade status: {e}")
 
-    def log_trade_entry(self, symbol: str, side: str, entry_price: float,
-                       volume: float, stop_loss: Optional[float] = None,
-                       take_profit: Optional[float] = None, strategy: str = "",
-                       notes: str = "") -> int:
-        """
-        Log a new trade entry.
+        # Log exit
+        if not os.path.exists(EXIT_LOG_FILE):
+            with open(EXIT_LOG_FILE, "w", newline="") as f:
+                csv.DictWriter(f, fieldnames=EXIT_FIELDS).writeheader()
 
-        Returns:
-            int: Trade ID
-        """
-        timestamp = datetime.now().isoformat()
+        with open(EXIT_LOG_FILE, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=EXIT_FIELDS)
+            writer.writerow({
+                "ticket": ticket,
+                "symbol": symbol,
+                "exit_time": exit_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exit_reason": reason,
+                "profit": profit,
+                "duration_minutes": round(duration, 2) if duration else None
+            })
 
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO trades (timestamp, symbol, side, entry_price, volume,
-                                  stop_loss, take_profit, status, strategy, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (timestamp, symbol, side, entry_price, volume, stop_loss,
-                  take_profit, "OPEN", strategy, notes))
+        logger.info(f"❌ Trade {ticket} closed due to: {reason}")
+        return True
 
-            trade_id = cursor.lastrowid
-            conn.commit()
+    def log_partial(self, ticket, tier, volume):
+        """Logs a partial close tier to JSON file."""
+        data = {}
+        if os.path.exists(PARTIAL_LOG_FILE):
+            with open(PARTIAL_LOG_FILE, "r") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    data = {}
 
-            logging.info(f"Logged trade entry: ID {trade_id}, {side} {volume} {symbol} @ {entry_price}")
+        if str(ticket) not in data:
+            data[str(ticket)] = []
 
-            return trade_id
+        data[str(ticket)].append({"tier": tier, "volume": volume, "time": datetime.utcnow().isoformat()})
 
-    def log_trade_exit(self, trade_id: int, exit_price: float, pnl: float,
-                      notes: str = ""):
-        """
-        Log a trade exit and update P&L.
-        """
-        timestamp = datetime.now().isoformat()
+        with open(PARTIAL_LOG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+        logger.info(f"💰 Logged partial close: {ticket}, tier={tier}, vol={volume}")
 
-            # Update the trade
-            cursor.execute('''
-                UPDATE trades
-                SET exit_price = ?, pnl = ?, status = 'CLOSED', notes = notes || ?
-                WHERE id = ?
-            ''', (exit_price, pnl, f" | Exit: {notes}", trade_id))
+    def has_partial(self, ticket, tier):
+        """Checks if a partial close tier has been executed."""
+        if not os.path.exists(PARTIAL_LOG_FILE):
+            return False
+        with open(PARTIAL_LOG_FILE, "r") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                return False
+        return str(ticket) in data and any(p["tier"] == tier for p in data[str(ticket)])
 
-            # Update daily P&L
-            today = datetime.now().date().isoformat()
-            cursor.execute('''
-                INSERT OR REPLACE INTO daily_pnl (date, total_pnl, total_trades,
-                                                winning_trades, losing_trades)
-                SELECT ?, COALESCE(SUM(pnl), 0), COUNT(*),
-                       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END),
-                       SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END)
-                FROM trades
-                WHERE DATE(timestamp) = ? AND status = 'CLOSED'
-            ''', (today, today))
+    def get_entry_atr(self, ticket):
+        """Returns entry ATR recorded when the trade was placed."""
+        if not os.path.exists(TRADE_LOG_FILE):
+            return None
+        try:
+            df = pd.read_csv(TRADE_LOG_FILE)
+            row = df.loc[df["ticket"] == ticket]
+            if not row.empty:
+                return float(row.iloc[-1]["entry_atr"])
+        except Exception as e:
+            logger.warning(f"Error getting entry ATR: {e}")
+        return None
 
-            conn.commit()
+    def get_daily_pnl(self, days=1):
+        """Returns total profit/loss for today or past N days."""
+        if not os.path.exists(EXIT_LOG_FILE):
+            return []
+        try:
+            df = pd.read_csv(EXIT_LOG_FILE)
+            df["exit_time"] = pd.to_datetime(df["exit_time"])
+            today = datetime.utcnow().date()
+            recent = df[df["exit_time"].dt.date >= today - pd.to_timedelta(days, unit="d")]
+            total_pnl = recent["profit"].sum()
+            return [{"date": str(today), "total_pnl": round(total_pnl, 2)}]
+        except Exception as e:
+            logger.warning(f"Error getting daily PnL: {e}")
+            return []
 
-            logging.info(f"Logged trade exit: ID {trade_id}, Exit @ {exit_price}, P&L: {pnl}")
+    def get_total_pnl(self):
+        """Returns total profit/loss from all trades."""
+        if not os.path.exists(EXIT_LOG_FILE):
+            return 0.0
+        try:
+            df = pd.read_csv(EXIT_LOG_FILE)
+            return round(df["profit"].sum(), 2)
+        except Exception as e:
+            logger.warning(f"Error getting total PnL: {e}")
+            return 0.0
 
-    def update_position(self, trade_id: int, current_price: float,
-                       unrealized_pnl: float):
-        """
-        Update current position information.
-        """
-        timestamp = datetime.now().isoformat()
+    def get_trade_history(self, limit=100):
+        """Returns list of recent trades."""
+        if not os.path.exists(TRADE_LOG_FILE):
+            return []
+        try:
+            df = pd.read_csv(TRADE_LOG_FILE)
+            df = df.tail(limit)
+            return df.to_dict('records')
+        except Exception as e:
+            logger.warning(f"Error getting trade history: {e}")
+            return []
 
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+    def log_auto_close(self, ticket, symbol, position_type, close_reason, pnl):
+        """Logs an auto-close event."""
+        return self.log_exit(ticket, close_reason, pnl, symbol)
 
-            # Check if position exists
-            cursor.execute("SELECT id FROM positions WHERE trade_id = ?", (trade_id,))
-            existing = cursor.fetchone()
+    def compute_statistics(self):
+        """Generates summary performance metrics."""
+        if not os.path.exists(EXIT_LOG_FILE):
+            return {}
 
-            if existing:
-                # Update existing position
-                cursor.execute('''
-                    UPDATE positions
-                    SET current_price = ?, unrealized_pnl = ?, timestamp = ?
-                    WHERE trade_id = ?
-                ''', (current_price, unrealized_pnl, timestamp, trade_id))
-            else:
-                # Get trade details to create position
-                cursor.execute('''
-                    SELECT symbol, side, entry_price, volume, stop_loss, take_profit
-                    FROM trades WHERE id = ?
-                ''', (trade_id,))
-                trade = cursor.fetchone()
+        try:
+            df = pd.read_csv(EXIT_LOG_FILE)
+            df["profit"] = pd.to_numeric(df["profit"], errors="coerce")
 
-                if trade:
-                    symbol, side, entry_price, volume, sl, tp = trade
-                    cursor.execute('''
-                        INSERT INTO positions (trade_id, symbol, side, entry_price,
-                                             current_price, volume, stop_loss, take_profit,
-                                             unrealized_pnl, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (trade_id, symbol, side, entry_price, current_price, volume,
-                          sl, tp, unrealized_pnl, timestamp))
+            win_trades = df[df["profit"] > 0]
+            loss_trades = df[df["profit"] <= 0]
+            total = len(df)
+            win_rate = (len(win_trades) / total * 100) if total else 0
+            avg_profit = df["profit"].mean()
+            best = df["profit"].max()
+            worst = df["profit"].min()
 
-            conn.commit()
+            return {
+                "total_trades": total,
+                "win_rate": round(win_rate, 2),
+                "avg_profit": round(avg_profit, 2),
+                "best_trade": best,
+                "worst_trade": worst,
+                "total_pnl": round(df["profit"].sum(), 2)
+            }
+        except Exception as e:
+            logger.warning(f"Error computing statistics: {e}")
+            return {}
 
-    def get_open_positions(self) -> List[Dict]:
-        """
-        Get all currently open positions.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT trade_id, symbol, side, entry_price, current_price, volume,
-                       stop_loss, take_profit, unrealized_pnl, timestamp
-                FROM positions
-                ORDER BY timestamp DESC
-            ''')
-
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-    def get_trade_history(self, limit: int = 100) -> List[Dict]:
-        """
-        Get recent trade history.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM trades
-                ORDER BY timestamp DESC
-                LIMIT ?
-            ''', (limit,))
-
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-    def get_daily_pnl(self, days: int = 30) -> List[Dict]:
-        """
-        Get daily P&L for the last N days.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM daily_pnl
-                ORDER BY date DESC
-                LIMIT ?
-            ''', (days,))
-
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-    def get_total_pnl(self) -> float:
-        """
-        Get total P&L across all closed trades.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT COALESCE(SUM(pnl), 0) as total_pnl
-                FROM trades
-                WHERE status = 'CLOSED'
-            ''')
-
-            result = cursor.fetchone()
-            return result[0] if result else 0.0
-
-    def log_auto_close(self, ticket: int, symbol: str, position_type: str,
-                      close_reason: str, pnl: Optional[float] = None):
-        """
-        Log an automatic position close event.
-
-        Args:
-            ticket (int): Position ticket number
-            symbol (str): Trading symbol
-            position_type (str): 'BUY' or 'SELL'
-            close_reason (str): Reason for auto-close
-            pnl (float, optional): Profit/loss if available
-        """
-        timestamp = datetime.now().isoformat()
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            # Insert as a special trade entry for auto-close logging
-            cursor.execute('''
-                INSERT INTO trades (timestamp, symbol, side, entry_price, volume,
-                                  pnl, status, strategy, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (timestamp, symbol, position_type, 0.0, 0.0, pnl, "AUTO_CLOSED",
-                  "AUTO_CLOSE", f"Ticket: {ticket} | Reason: {close_reason}"))
-
-            # Update daily P&L if pnl is available
-            if pnl is not None:
-                today = datetime.now().date().isoformat()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO daily_pnl (date, total_pnl, total_trades,
-                                                    winning_trades, losing_trades)
-                    SELECT ?, COALESCE(SUM(pnl), 0), COUNT(*),
-                           SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END),
-                           SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END)
-                    FROM trades
-                    WHERE DATE(timestamp) = ? AND status IN ('CLOSED', 'AUTO_CLOSED')
-                ''', (today, today))
-
-            conn.commit()
-
-            logging.info(f"Logged auto-close: Ticket {ticket}, {position_type} {symbol}, Reason: {close_reason}, P&L: {pnl}")
-
-# Global instance
+# Instantiate the logger
 trade_logger = TradeLogger()
+
+def log_signal(signal_obj: dict):
+    """
+    Append a single JSON line describing the signal and confluence breakdown.
+    Fields: symbol, confluence_score, direction_score, factor_scores, decision, confidence, rationale, timestamp
+    """
+    try:
+        with open(SIGNAL_LOG_FILE, "a", encoding="utf-8") as f:
+            json_line = json.dumps(signal_obj, default=str)
+            f.write(json_line + "\n")
+        logger.info(f"📡 Logged signal: {signal_obj.get('symbol')} {signal_obj.get('decision')} conf={signal_obj.get('confluence_score')}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write signal log: {e}")
+        return False

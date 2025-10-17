@@ -1,6 +1,7 @@
 import MetaTrader5 as mt5
 import logging
 import os
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -18,13 +19,37 @@ def connect_mt5(account=None, password=None, server=None, timeout=60000):
 
     # If credentials are provided, login
     if account and password and server:
-        authorized = mt5.login(account, password, server)
-        if authorized:
-            logger.info(f"Connected to MT5 account {account} on {server}")
-        else:
-            logger.error(f"Failed to login: {mt5.last_error()}")
+        logger.info(f"Attempting to login to MT5 account {account} on {server}")
+        # Convert account to int if it's a string
+        try:
+            account_int = int(account)
+        except (ValueError, TypeError):
+            logger.error(f"Invalid account number format: {account}")
             mt5.shutdown()
             return False
+
+        authorized = mt5.login(login=account_int, server=server, password=password)
+        if authorized:
+            logger.info(f"Login command sent to MT5 account {account_int} on {server}")
+            # Wait for login to complete - MT5 login is asynchronous
+            max_wait = 10  # seconds
+            for i in range(max_wait):
+                time.sleep(1)
+                account_info = mt5.account_info()
+                if account_info is not None:
+                    logger.info(f"Successfully logged in. Account info retrieved: Balance={account_info.balance}, Equity={account_info.equity}")
+                    break
+                if i == max_wait - 1:
+                    logger.error(f"Login timeout - account info not available after {max_wait} seconds")
+                    mt5.shutdown()
+                    return False
+        else:
+            error = mt5.last_error()
+            logger.error(f"Failed to send login command: {error}")
+            mt5.shutdown()
+            return False
+    else:
+        logger.warning("No credentials provided - MT5 initialized in demo mode")
     return True
 
 

@@ -18,6 +18,11 @@ def calculate_rsi(data, period=14, column='close'):
     if column not in data.columns:
         raise ValueError(f"Column '{column}' not found in data")
 
+    # Ensure we have enough data
+    if len(data) < period + 1:
+        # Return series with NaN values if not enough data
+        return pd.Series([np.nan] * len(data), index=data.index)
+
     # Calculate price changes
     delta = data[column].diff()
 
@@ -25,10 +30,17 @@ def calculate_rsi(data, period=14, column='close'):
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
 
-    # Calculate RS and RSI
+    # Calculate RS and RSI with NaN protection
     rs = gain / loss
+    # Replace infinite values with NaN
+    rs = rs.replace([np.inf, -np.inf], np.nan)
+    
+    # Calculate RSI with NaN protection
     rsi = 100 - (100 / (1 + rs))
-
+    
+    # Fill initial NaN values with neutral RSI (50)
+    rsi = rsi.fillna(50.0)
+    
     return rsi
 
 def add_rsi_signals(data, period=14, overbought=70, oversold=30, column='close'):

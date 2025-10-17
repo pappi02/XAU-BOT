@@ -70,8 +70,13 @@ def run_real_time_bot():
             df_with_indicators = strategy.prepare_data(df)
 
             # Step 3: Get news sentiment
-            news_sentiment = get_latest_forex_news()
-            logger.info(f"News sentiment: {news_sentiment}")
+            news_data = get_latest_forex_news()
+            if isinstance(news_data, dict) and news_data.get('available', False):
+                news_sentiment = news_data.get('sentiment', 'neutral')
+                logger.info(f"News sentiment: {news_sentiment} (confidence: {news_data.get('confidence', 0.0):.1%})")
+            else:
+                news_sentiment = 'neutral'
+                logger.info(f"News sentiment: {news_sentiment} (no recent news available)")
 
             # Step 4: Generate trading signal
             signal_info = strategy.generate_signal(df_with_indicators)
@@ -240,9 +245,116 @@ def run_analysis_mode():
         logger.error(f"Unexpected error: {str(e)}")
         disconnect_mt5()
 
+def _analyze_signal_confluence(timeframe_signals: dict, analysis_result: dict) -> dict:
+    """
+    Analyze signal confluence across timeframes to determine trade direction.
+    
+    Args:
+        timeframe_signals: Dictionary of timeframe signals with structure:
+                          {'M1': {'signal': 'BUY/SELL/HOLD', 'strength': %, 'score': value}, ...}
+        analysis_result: Full analysis result for additional context
+        
+    Returns:
+        dict: {'direction': 'BUY/SELL/WAIT', 'confidence': float, 'details': str}
+    """
+    if not timeframe_signals:
+        return {'direction': 'WAIT', 'confidence': 0.0, 'details': 'No timeframe signals available'}
+    
+    # Count signals by direction with strength weighting
+    buy_weighted_score = 0.0
+    sell_weighted_score = 0.0
+    total_weight = 0.0
+    
+    # Timeframe weights (higher timeframes have more influence)
+    tf_weights = {
+        'M1': 0.1,   # Entry timing
+        'M5': 0.15,  # Short-term trend
+        'M15': 0.2,  # Medium-term direction
+        'M30': 0.25, # Volatility filter
+        'H1': 0.15,  # Trend validation
+        'H4': 0.15   # Macro bias
+    }
+    
+    signal_details = []
+    
+    for tf_name, signal_data in timeframe_signals.items():
+        signal = signal_data.get('signal', 'HOLD')
+        strength = signal_data.get('strength', 0.0)
+        weight = tf_weights.get(tf_name, 0.1)
+        
+        signal_details.append(f"{tf_name}:{signal}({strength:.0f}%)")
+        
+        if signal == 'BUY':
+            buy_weighted_score += strength * weight
+        elif signal == 'SELL':
+            sell_weighted_score += strength * weight
+        
+        total_weight += weight
+    
+    # Normalize scores
+    if total_weight > 0:
+        buy_score = buy_weighted_score / total_weight
+        sell_score = sell_weighted_score / total_weight
+    else:
+        buy_score = sell_score = 0.0
+    
+    # Determine direction based on score difference
+    score_diff = abs(buy_score - sell_score)
+    min_signal_threshold = 30.0  # Minimum 30% strength difference
+    
+    if score_diff >= min_signal_threshold:
+        if buy_score > sell_score:
+            direction = 'BUY'
+            confidence = min(buy_score / 100.0, 1.0)
+            details = f"BUY signals dominate ({buy_score:.1f}% vs {sell_score:.1f}%)"
+        else:
+            direction = 'SELL'
+            confidence = min(sell_score / 100.0, 1.0)
+            details = f"SELL signals dominate ({sell_score:.1f}% vs {buy_score:.1f}%)"
+    else:
+        # Check for optional factors when signals are close
+        direction = 'WAIT'
+        confidence = 0.0
+        
+        # Use news sentiment as optional tiebreaker (if available)
+        news_sentiment = analysis_result.get('news_sentiment', 'neutral')
+        if news_sentiment in ['bullish', 'bearish']:
+            if news_sentiment == 'bullish' and buy_score >= sell_score:
+                direction = 'BUY'
+                confidence = 0.7  # Moderate confidence for news-based decision
+                details = f"Tied signals ({buy_score:.1f}% vs {sell_score:.1f}%), bullish news bias"
+            elif news_sentiment == 'bearish' and sell_score >= buy_score:
+                direction = 'SELL'
+                confidence = 0.7
+                details = f"Tied signals ({buy_score:.1f}% vs {sell_score:.1f}%), bearish news bias"
+            elif news_sentiment == 'bullish':
+                # Bullish news but SELL signals stronger - still favor BUY with news bias
+                direction = 'BUY'
+                confidence = 0.6  # Lower confidence due to conflicting signals
+                details = f"Conflicting signals ({buy_score:.1f}% vs {sell_score:.1f}%), bullish news bias"
+            elif news_sentiment == 'bearish':
+                # Bearish news but BUY signals stronger - still favor SELL with news bias
+                direction = 'SELL'
+                confidence = 0.6  # Lower confidence due to conflicting signals
+                details = f"Conflicting signals ({buy_score:.1f}% vs {sell_score:.1f}%), bearish news bias"
+            else:
+                details = f"Tied signals ({buy_score:.1f}% vs {sell_score:.1f}%), news sentiment {news_sentiment}"
+        else:
+            details = f"Signals too close ({buy_score:.1f}% vs {sell_score:.1f}%), no clear direction"
+    
+    # Add signal breakdown to details
+    signal_breakdown = " | ".join(signal_details)
+    details += f" | Signals: {signal_breakdown}"
+    
+    return {
+        'direction': direction,
+        'confidence': confidence,
+        'details': details
+    }
+
 def main_loop():
     """
-    Phase 5 Enhanced Bot — includes full connection and safety checks
+    Phase 7 Enhanced Bot — Signal-Driven Multi-Timeframe Confluence Trading
     """
 
     # --- Step 1: Ensure MetaTrader 5 is initialized properly ---
@@ -256,7 +368,7 @@ def main_loop():
     if MT5_ACCOUNT and MT5_PASSWORD and MT5_SERVER:
         logger.info("🔐 Connecting to MT5 account...")
         if not connect_mt5(MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_TIMEOUT):
-            logger.error("❌ Failed to connect to MT5 account. Exiting Phase 5.")
+            logger.error("❌ Failed to connect to MT5 account. Exiting Phase 7.")
             return
         logger.info("✅ Connected to MT5 account")
 
@@ -275,7 +387,7 @@ def main_loop():
             return
         logger.info(f"✅ Symbol '{SYMBOL_PHASE5}' added to Market Watch successfully.")
 
-    # --- Step 4: Instantiate managers and strategy ---
+    # --- Step 4: Instantiate managers, strategy, and multi-timeframe analyzer ---
     risk_mgr = RiskManager(mt5, config)
     executor = TradeExecutor(mt5, config, risk_mgr)
     strategy = BasicTradingStrategy(
@@ -286,53 +398,32 @@ def main_loop():
         bb_std=BB_STD_DEV
     )
 
-    logger.info("🚀 Phase 5 Bot initialized and running...")
+    # Import and initialize multi-timeframe analyzer
+    from analysis.multi_timeframe_analyzer import MultiTimeframeAnalyzer
+    analyzer = MultiTimeframeAnalyzer()
+
+    logger.info("🚀 Phase 9 Multi-Timeframe & Context-Aware Decision Engine initialized and running...")
 
     try:
         while True:
             try:
-                # --- Step 5: Fetch historical data safely ---
-                timeframe_map = {
-                    'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
-                    'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4, 'D1': mt5.TIMEFRAME_D1,
-                    'W1': mt5.TIMEFRAME_W1, 'MN': mt5.TIMEFRAME_MN1
-                }
-                mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), mt5.TIMEFRAME_M5)
+                # --- Step 5: Phase 9 Multi-Timeframe Analysis ---
+                logger.info("🔍 Performing Phase 9 multi-timeframe analysis...")
 
-                df = get_candles(SYMBOL_PHASE5, mt5_timeframe, NUM_CANDLES)
-                if df is None or df.empty:
-                    logger.warning("⚠️ No data fetched or empty dataframe — retrying in 30 seconds...")
-                    time.sleep(30)
-                    continue
+                analysis_result = analyzer.analyze_market(SYMBOL_PHASE5)
 
-                logger.info(f"📊 {len(df)} candles fetched | Latest price: ${df['close'].iloc[-1]:.2f}")
+                alignment = analysis_result['alignment']
+                action = analysis_result['action']
+                should_trade = analysis_result['should_trade']
+                position_params = analysis_result['position_params']
 
-                # --- Step 6: Apply indicators ---
-                df = strategy.prepare_data(df)
+                logger.info(f"📊 Alignment: {alignment} | Action: {action} | Should Trade: {should_trade}")
 
-                # --- Step 7: Compute ATR for SL ---
-                atr_series = atr(df, period=ATR_PERIOD)
-                last_atr = float(atr_series.iloc[-1]) if len(atr_series) > 0 and not pd.isna(atr_series.iloc[-1]) else None
+                # Log timeframe analysis
+                for tf_name, tf_analysis in analysis_result['timeframe_analysis'].items():
+                    logger.debug(f"  {tf_name}: EMA={tf_analysis['ema_trend']}, RSI={tf_analysis['rsi']:.1f}, ATR={tf_analysis['atr']:.3f}, Strength={tf_analysis['signal_strength']:.1f}%")
 
-                # --- Step 8: Generate signal ---
-                signal_info = strategy.generate_signal(df)
-                signal = signal_info['signal']
-                strength = signal_info['strength']
-
-                logger.info("📈 Signal: %s | RSI: %.2f | Strength: %.1f%%", signal, df['RSI_14'].iloc[-1], strength)
-
-                # --- Step 9: News sentiment bias ---
-                news_sentiment = get_latest_forex_news()
-                logger.info("📰 News sentiment: %s", news_sentiment)
-
-                if news_sentiment == "bullish" and signal == "SELL":
-                    signal = "HOLD"
-                    logger.info("📊 News bias: overriding SELL to HOLD due to bullish sentiment")
-                elif news_sentiment == "bearish" and signal == "BUY":
-                    signal = "HOLD"
-                    logger.info("📊 News bias: overriding BUY to HOLD due to bearish sentiment")
-
-    # --- Step 10: Position monitoring and auto-close ---
+                # --- Step 6: Position monitoring and auto-close ---
                 if config.AUTO_CLOSE_ENABLED:
                     open_positions = get_open_positions(SYMBOL_PHASE5)
                     if open_positions:
@@ -346,24 +437,63 @@ def main_loop():
                             if position_age < config.MIN_HOLDING_TIME:
                                 continue
 
-                            # Get current market conditions
-                            current_signal_info = strategy.generate_signal(df)
-                            current_signal = current_signal_info['signal']
-                            signal_strength = current_signal_info['strength']
+                            # Get current market conditions using multi-timeframe analysis
+                            current_analysis = analyzer.analyze_market(SYMBOL_PHASE5)
+                            current_signal = current_analysis['overall_signal']
+                            signal_strength = current_analysis['confidence'] * 100  # Convert to percentage
 
-                            # Detect trend reversals
-                            reversal_info = strategy.detect_trend_reversal(df)
+                            # Detect trend reversals using multi-timeframe data
+                            # Get H1 data for reversal detection
+                            h1_data = None
+                            try:
+                                from data.fetch_candles import get_candles
+                                h1_data = get_candles(SYMBOL_PHASE5, 16385, config.NUM_CANDLES)  # H1 timeframe
+                                if h1_data is not None:
+                                    h1_data = strategy.prepare_data(h1_data)
+                                    reversal_info = strategy.detect_trend_reversal(h1_data)
+                                else:
+                                    reversal_info = {'reversal_detected': False}
+                            except Exception as ex:
+                                logger.warning(f"Could not fetch H1 data for reversal detection: {ex}")
+                                reversal_info = {'reversal_detected': False}
 
                             # Get news sentiment
-                            news_sentiment = get_latest_forex_news()
+                            news_sentiment = analysis_result['news_sentiment']
+
+                            # Get ATR from position parameters
+                            atr_value = position_params.get('atr_value', None)
+
+                            # ===== Apply Break-even SL =====
+                            try:
+                                break_even_applied = executor.apply_break_even_sl(pos)
+                                if break_even_applied:
+                                    logger.info(f"✅ Break-even SL applied to position {pos.ticket}")
+                            except Exception as ex:
+                                logger.exception(f"❌ Error applying break-even SL to position {pos.ticket}: {ex}")
+
+                            # ===== Apply Trailing Stop =====
+                            try:
+                                trailing_applied = executor.apply_trailing_stop(pos, position_params['entry_price'])
+                                if trailing_applied:
+                                    logger.info(f"✅ Trailing stop applied to position {pos.ticket}")
+                            except Exception as ex:
+                                logger.exception(f"❌ Error applying trailing stop to position {pos.ticket}: {ex}")
+
+                            # ===== Check Partial Close Conditions =====
+                            try:
+                                partial_closed = executor.check_partial_close_conditions(pos, position_params['entry_price'])
+                                if partial_closed:
+                                    logger.info(f"✅ Partial close executed for position {pos.ticket}")
+                            except Exception as ex:
+                                logger.exception(f"❌ Error checking partial close for position {pos.ticket}: {ex}")
 
                             # Check if position should be closed using comprehensive auto-close logic
                             close_decision = executor.should_close_trade(
                                 position=pos,
-                                current_data=df,
+                                current_data=h1_data if h1_data is not None else None,
                                 strategy=strategy,
                                 news_sentiment=news_sentiment,
-                                atr_value=last_atr,
+                                atr_value=atr_value,
                                 entry_atr=None  # Would need to track this at entry
                             )
 
@@ -391,7 +521,7 @@ def main_loop():
                     # Emergency close all positions if account health is critical
                     try:
                         account = risk_mgr.refresh_account()
-                        initial_balance = config.INITIAL_ACCOUNT_BALANCE  # Use configurable initial balance
+                        initial_balance = config.INITIAL_ACCOUNT_BALANCE
                         current_balance = float(account.balance)
                         balance_drop_pct = (initial_balance - current_balance) / initial_balance
 
@@ -401,81 +531,88 @@ def main_loop():
                     except Exception as ex:
                         logger.exception(f"❌ Error checking emergency close conditions: {ex}")
 
-                # --- Step 11: Trade execution ---
-                if signal in ("BUY", "SELL"):
-                    entry_price = df['close'].iloc[-1]
+                # --- Step 7: Phase 9 Signal-Driven Trade Execution ---
+                # Enhanced trade execution logic with diagnostic logging
+                confidence = analysis_result['confidence_score']
+                logger.info(f"🧭 Trade Decision | Action={action} | Should Trade={should_trade} | Confidence={confidence:.3f} | Alignment={analysis_result['alignment']}")
+                
+                # INTELLIGENT TRADING: Execute trade if confidence >= 0.7 AND clear signal direction
+                if confidence >= 0.7:
+                    # Determine trade direction based on comprehensive signal analysis
+                    trade_direction = None
+                    signal_confidence = 0.0
+                    
+                    if action in ("BUY", "SELL"):
+                        # Use the determined action if it's clear
+                        trade_direction = action
+                        signal_confidence = confidence
+                        logger.info(f"🎯 Using determined action: {trade_direction} (confidence: {confidence:.3f})")
+                    else:
+                        # Action is WAIT but confidence is high - analyze signal direction from timeframe data
+                        logger.info(f"⚠️ High confidence ({confidence:.3f}) but action=WAIT - analyzing signal confluence...")
+                        
+                        # Get timeframe signals (structured as {'signal': 'BUY/SELL/HOLD', 'strength': %, 'score': value})
+                        timeframe_signals = analysis_result.get('timeframe_signals', {})
+                        
+                        if timeframe_signals:
+                            # Analyze signal strength and direction across timeframes
+                            signal_analysis = _analyze_signal_confluence(timeframe_signals, analysis_result)
+                            trade_direction = signal_analysis['direction']
+                            signal_confidence = signal_analysis['confidence']
+                            
+                            if trade_direction in ('BUY', 'SELL'):
+                                logger.info(f"📊 Signal Analysis: {trade_direction} | Confidence: {signal_confidence:.3f} | Details: {signal_analysis['details']}")
+                            else:
+                                logger.info(f"📊 Signal Analysis: No clear direction | Details: {signal_analysis['details']}")
+                        else:
+                            logger.warning("⚠️ No timeframe signals available for analysis")
+                    
+                    # Execute trade if we have a clear direction
+                    if trade_direction in ('BUY', 'SELL'):
+                        # Get current open positions for comprehensive checks
+                        open_positions = get_open_positions(SYMBOL_PHASE5)
 
-                    # Calculate dynamic stop loss multiplier
-                    trend_strength = signal_info['components']['ema_signal']  # -1, 0, 1
-                    rsi_condition = signal_info['components']['rsi_condition']  # 'oversold', 'overbought', 'neutral'
+                        # Use the comprehensive should_execute_trade method for final decision
+                        should_enter, reason = analyzer.should_execute_trade(analysis_result, open_positions, trade_direction)
 
-                    # Calculate ADX if available (placeholder - would need ADX indicator)
-                    adx_value = None  # TODO: Implement ADX calculation
+                        if should_enter:
+                            logger.info(f"🎯 SIGNAL-BASED TRADE APPROVED: {trade_direction} | Signal Confidence: {signal_confidence:.3f} | Overall Confidence: {confidence:.3f} | Reason: {reason}")
 
-                    # Volume factor (placeholder - would need volume data)
-                    volume_factor = 1.0  # TODO: Implement volume/liquidity assessment
+                            # Use position parameters from Phase 9 analysis
+                            entry_price = position_params['entry_price']
+                            stop_price = position_params['stop_loss']
+                            tp_price = position_params['take_profit']
+                            dynamic_lot_size = position_params['lot_size']
 
-                    dynamic_sl_multiplier = dynamic_stop_loss(
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        news_sentiment=news_sentiment,
-                        trend_strength=trend_strength,
-                        rsi_condition=rsi_condition,
-                        position_type=signal,
-                        adx_value=adx_value,
-                        volume_factor=volume_factor
-                    )
+                            logger.info(f"📊 Position Parameters: Entry=${entry_price:.2f}, SL=${stop_price:.2f}, TP=${tp_price:.2f}, Lot={dynamic_lot_size}, RR={position_params['rr_ratio']:.1f}")
 
-                    # Calculate SL distance using dynamic multiplier
-                    sl_distance = risk_mgr.calculate_dynamic_sl_distance(entry_price, last_atr, dynamic_sl_multiplier)
+                            try:
+                                res = executor.enter_trade(SYMBOL_PHASE5, trade_direction, entry_price, stop_price, tp_price, volume=dynamic_lot_size)
+                                logger.info(f"✅ SIGNAL-DRIVEN TRADE EXECUTED: {trade_direction} | Signal Confidence: {signal_confidence:.3f} | Overall Confidence: {confidence:.3f} | Result={res}")
 
-                    # Calculate dynamic risk-reward ratio
-                    dynamic_rr = dynamic_rr_ratio(
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        news_sentiment=news_sentiment,
-                        trend_strength=trend_strength,
-                        rsi_condition=rsi_condition,
-                        position_type=signal
-                    )
+                                # Update last trade time for cooldown tracking
+                                analyzer.last_trade_time = time.time()
 
-                    # Calculate dynamic lot size
-                    session = risk_mgr.get_current_market_session()
-                    recent_perf = risk_mgr.get_recent_performance()
-                    news_impact = risk_mgr.get_news_impact_level(news_sentiment)
-                    trade_type = "trend" if trend_strength > 0 else "reversal"  # Simplified trade type detection
+                            except Exception as ex:
+                                logger.exception("❌ Failed to enter signal-based trade: %s", ex)
+                        else:
+                            logger.info(f"📊 Trade blocked by risk management: {reason}")
+                    else:
+                        logger.info(f"📊 No clear signal direction despite high confidence ({confidence:.3f}) - skipping trade")
+                else:
+                    logger.info(f"📉 Confidence too low ({confidence:.3f} < 0.7) - skipping trade")
 
-                    dynamic_lot_size = risk_mgr.calculate_dynamic_lot_size(
-                        stop_loss_distance=sl_distance,
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        session=session,
-                        recent_perf=recent_perf,
-                        news_impact=news_impact,
-                        trade_type=trade_type
-                    )
-
-                    logger.info(f"📊 Dynamic calculations: Signal={strength:.1f}%, ATR={last_atr:.2f}, News={news_sentiment}, Trend={trend_strength}, RSI={rsi_condition}, Session={session} → SL_Multiplier={dynamic_sl_multiplier}, RR={dynamic_rr}, Lot_Size={dynamic_lot_size}")
-
-                    stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
-                    tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
-
-                    try:
-                        res = executor.enter_trade(SYMBOL_PHASE5, signal, entry_price, stop_price, tp_price, volume=dynamic_lot_size)
-                        logger.info(f"✅ Trade placed: {signal} | SL={stop_price:.2f} | TP={tp_price:.2f} | RR={dynamic_rr} | SL_Distance={sl_distance:.2f} | Lot_Size={dynamic_lot_size} | Result={res}")
-                    except Exception as ex:
-                        logger.exception("❌ Failed to enter trade: %s", ex)
-
-                # --- Step 11: Pause before next analysis ---
-                time.sleep(60)
+                # --- Step 8: Pause before next analysis ---
+                logger.info(f"⏱️ Waiting {config.ANALYSIS_INTERVAL_SECONDS} seconds until next multi-timeframe analysis...")
+                time.sleep(config.ANALYSIS_INTERVAL_SECONDS)
 
             except Exception as e:
-                logger.exception("Error in main loop: %s", e)
+                logger.exception("Error in Phase 7 main loop: %s", e)
                 time.sleep(5)
 
     finally:
         disconnect_mt5()
-        logger.info("🔌 MT5 disconnected and bot stopped.")
+        logger.info("🔌 MT5 disconnected and Phase 7 bot stopped.")
 
 
 def main():

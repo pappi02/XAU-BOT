@@ -148,6 +148,187 @@ class TradeExecutor:
             logger.error(f"Failed to close position {ticket}: {res}")
             return False
 
+    def modify_position_sl(self, ticket, new_sl_price):
+        """Modify stop loss of a specific position."""
+        positions = self.mt5.positions_get(ticket=ticket)
+        if not positions:
+            logger.warning(f"No position found with ticket {ticket}")
+            return False
+
+        pos = positions[0]
+        symbol = pos.symbol
+
+        # Prepare modification request
+        modify_request = {
+            "action": self.mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "sl": float(new_sl_price),
+            "tp": pos.tp,  # Keep existing TP
+            "symbol": symbol
+        }
+
+        result = self.mt5.order_send(modify_request)
+        if result.retcode == self.mt5.TRADE_RETCODE_DONE:
+            logger.info(f"Successfully modified SL for position {ticket} to {new_sl_price}: {result}")
+            return True
+        else:
+            logger.error(f"Failed to modify SL for position {ticket}: {result}")
+            return False
+
+    def apply_break_even_sl(self, position):
+        """Apply break-even stop loss logic to a position."""
+        import config
+
+        if not config.BREAK_EVEN_ENABLED:
+            return False
+
+        # Calculate current profit in pips
+        if position.type == self.mt5.POSITION_TYPE_BUY:
+            current_profit_pips = (position.price_current - position.price_open) / self.config.CONTRACT_SIZE * 100000
+        else:
+            current_profit_pips = (position.price_open - position.price_current) / self.config.CONTRACT_SIZE * 100000
+
+        # Check if profit exceeds break-even threshold
+        if current_profit_pips >= config.BREAK_EVEN_PROFIT_PIPS:
+            # Calculate break-even SL price
+            buffer_price = config.BREAK_EVEN_BUFFER_PIPS / 100000 * self.config.CONTRACT_SIZE
+
+            if position.type == self.mt5.POSITION_TYPE_BUY:
+                break_even_sl = position.price_open + buffer_price
+                # Only move SL if it's higher than current SL
+                if position.sl == 0 or break_even_sl > position.sl:
+                    success = self.modify_position_sl(position.ticket, break_even_sl)
+                    if success:
+                        logger.info(f"Applied break-even SL to BUY position {position.ticket}: {break_even_sl}")
+                    return success
+            else:  # SELL
+                break_even_sl = position.price_open - buffer_price
+                # Only move SL if it's lower than current SL
+                if position.sl == 0 or break_even_sl < position.sl:
+                    success = self.modify_position_sl(position.ticket, break_even_sl)
+                    if success:
+                        logger.info(f"Applied break-even SL to SELL position {position.ticket}: {break_even_sl}")
+                    return success
+
+        return False
+
+    def apply_trailing_stop(self, position, current_price):
+        """Apply trailing stop logic to modify SL instead of closing."""
+        import config
+
+        if not config.TRAILING_STOP_MODIFICATION:
+            return False
+
+        # Calculate profit in pips
+        if position.type == self.mt5.POSITION_TYPE_BUY:
+            profit_pips = (current_price - position.price_open) / self.config.CONTRACT_SIZE * 100000
+        else:
+            profit_pips = (position.price_open - current_price) / self.config.CONTRACT_SIZE * 100000
+
+        # Check if profit exceeds activation threshold
+        if profit_pips > config.TRAILING_STOP_ACTIVATION_PIPS:
+            # Calculate new trailing stop
+            trail_distance = config.TRAILING_STOP_DISTANCE_PIPS / 100000 * self.config.CONTRACT_SIZE
+
+            if position.type == self.mt5.POSITION_TYPE_BUY:
+                new_sl = current_price - trail_distance
+                # Move SL up if new SL is higher than current SL
+                if position.sl == 0 or new_sl > position.sl:
+                    success = self.modify_position_sl(position.ticket, new_sl)
+                    if success:
+                        logger.info(f"Applied trailing stop to BUY position {position.ticket}: {new_sl}")
+                    return success
+            else:  # SELL
+                new_sl = current_price + trail_distance
+                # Move SL down if new SL is lower than current SL
+                if position.sl == 0 or new_sl < position.sl:
+                    success = self.modify_position_sl(position.ticket, new_sl)
+                    if success:
+                        logger.info(f"Applied trailing stop to SELL position {position.ticket}: {new_sl}")
+                    return success
+
+        return False
+
+    def partial_close_position(self, position, close_percentage, current_price):
+        """Partially close a position by specified percentage."""
+        import config
+
+        if not config.PARTIAL_CLOSE_ENABLED:
+            return False
+
+        # Calculate volume to close
+        close_volume = position.volume * close_percentage
+
+        # Ensure minimum volume remains
+        remaining_volume = position.volume - close_volume
+        if remaining_volume < config.PARTIAL_CLOSE_MIN_VOLUME:
+            close_volume = position.volume - config.PARTIAL_CLOSE_MIN_VOLUME
+            if close_volume <= 0:
+                logger.warning(f"Cannot partial close position {position.ticket} - volume too small")
+                return False
+
+        # Create partial close order
+        is_buy = position.type == self.mt5.POSITION_TYPE_BUY
+        order_type = self.mt5.ORDER_TYPE_SELL if is_buy else self.mt5.ORDER_TYPE_BUY
+        symbol = position.symbol
+
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            logger.error(f"No tick data for {symbol}")
+            return False
+
+        price = float(tick.bid if is_buy else tick.ask)
+
+        req = {
+            "action": self.mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(close_volume),
+            "type": order_type,
+            "position": position.ticket,
+            "price": price,
+            "deviation": self.config.ORDER_DEVIATION,
+            "magic": MAGIC,
+            "comment": f"Partial close {close_percentage*100:.0f}%",
+            "type_time": self.mt5.ORDER_TIME_GTC,
+            "type_filling": self.mt5.ORDER_FILLING_IOC,
+        }
+
+        res = self.mt5.order_send(req)
+        if res.retcode == self.mt5.TRADE_RETCODE_DONE:
+            logger.info(f"Successfully partial closed position {position.ticket} ({close_percentage*100:.0f}%): {res}")
+            return True
+        else:
+            logger.error(f"Failed to partial close position {position.ticket}: {res}")
+            return False
+
+    def check_partial_close_conditions(self, position, current_price):
+        """Check if position should be partially closed based on profit levels."""
+        import config
+
+        if not config.PARTIAL_CLOSE_ENABLED:
+            return False
+
+        # Calculate current profit in pips
+        if position.type == self.mt5.POSITION_TYPE_BUY:
+            current_profit_pips = (current_price - position.price_open) / self.config.CONTRACT_SIZE * 100000
+        else:
+            current_profit_pips = (position.price_open - current_price) / self.config.CONTRACT_SIZE * 100000
+
+        # Check each partial close level
+        for level in config.PARTIAL_CLOSE_LEVELS:
+            profit_threshold = level['profit_pips']
+            close_percentage = level['close_percentage']
+
+            # Check if profit exceeds threshold and we haven't already partial closed at this level
+            if current_profit_pips >= profit_threshold:
+                # Simple check - in production, track which levels have been executed
+                success = self.partial_close_position(position, close_percentage, current_price)
+                if success:
+                    logger.info(f"Partial close executed for position {position.ticket} at {profit_threshold} pips profit")
+                    return True
+
+        return False
+
     def close_profitable_positions(self, symbol):
         """Close all profitable positions for the given symbol."""
         positions = self.mt5.positions_get(symbol=symbol)

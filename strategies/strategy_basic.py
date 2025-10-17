@@ -3,11 +3,14 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import logging
 
 # Import indicators
 from indicators.ema import add_ema_signals, get_ema_trend
 from indicators.rsi import add_rsi_signals, get_rsi_condition
 from indicators.bollinger import add_bollinger_signals, get_bollinger_position
+
+logger = logging.getLogger(__name__)
 
 class BasicTradingStrategy:
     """
@@ -66,10 +69,20 @@ class BasicTradingStrategy:
         """
         if len(data) < max(self.ema_slow, self.rsi_period, self.bb_period):
             # Provide default components to avoid KeyError in callers (UI/dashboard)
+            # Enhanced fallback: try to generate signal even with limited data
+            try:
+                # Attempt to prepare data and generate signal with available data
+                prepared_data = self.prepare_data(data)
+                if len(prepared_data) >= 2:  # Minimum for basic analysis
+                    return self._generate_signal_with_available_data(prepared_data)
+            except Exception as e:
+                logger.warning(f"Could not generate signal with limited data: {e}")
+
+            # Ultimate fallback
             return {
                 'signal': 'HOLD',
                 'strength': 0,
-                'reasons': ['Not enough data'],
+                'reasons': ['Not enough data for reliable signal generation'],
                 'components': {
                     'ema_signal': 0,
                     'rsi_condition': 'neutral',
@@ -153,50 +166,267 @@ class BasicTradingStrategy:
             }
         }
 
-    def detect_trend_reversal(self, data):
+    def _generate_signal_with_available_data(self, data):
         """
-        Detect potential trend reversals based on indicator changes.
+        Generate signal with limited data when full indicator periods are not available.
+        Uses simplified logic with available indicators.
 
         Args:
-            data (pd.DataFrame): OHLC data with indicators
+            data (pd.DataFrame): Data with some indicators available
 
         Returns:
-            dict: Reversal detection results
+            dict: Signal information
         """
-        if len(data) < 10:  # Need some history
-            return {'reversal_detected': False, 'direction': None, 'strength': 0}
+        try:
+            latest = data.iloc[-1]
+            buy_signals = 0
+            sell_signals = 0
+            reasons = []
 
-        # Check for EMA crossover reversals
-        recent_ema_signals = data['EMA_signal'].tail(5).values
-        if len(recent_ema_signals) >= 3:
-            # Check if signal changed from bullish to bearish or vice versa
-            current_signal = recent_ema_signals[-1]
-            prev_signal = recent_ema_signals[-2]
+            # Check available indicators
+            if 'EMA_signal' in latest.index:
+                ema_signal = latest.get('EMA_signal', 0)
+                if ema_signal == 1:
+                    buy_signals += 1
+                    reasons.append("EMA bullish (limited data)")
+                elif ema_signal == -1:
+                    sell_signals += 1
+                    reasons.append("EMA bearish (limited data)")
 
-            if current_signal != prev_signal and current_signal != 0:
-                # Signal changed - potential reversal
-                reversal_strength = abs(current_signal - prev_signal) * 50  # Scale to 0-100
-                return {
-                    'reversal_detected': True,
-                    'direction': 'bullish_to_bearish' if current_signal == -1 else 'bearish_to_bullish',
-                    'strength': min(reversal_strength, 100)
+            if 'RSI_signal' in latest.index:
+                rsi_signal = latest.get('RSI_signal', 0)
+                if rsi_signal == 1:
+                    buy_signals += 1
+                    reasons.append("RSI oversold (limited data)")
+                elif rsi_signal == -1:
+                    sell_signals += 1
+                    reasons.append("RSI overbought (limited data)")
+
+            if 'BB_signal' in latest.index:
+                bb_signal = latest.get('BB_signal', 0)
+                if bb_signal == 1:
+                    buy_signals += 1
+                    reasons.append("Price at lower BB (limited data)")
+                elif bb_signal == -1:
+                    sell_signals += 1
+                    reasons.append("Price at upper BB (limited data)")
+
+            # Determine signal based on available indicators
+            available_indicators = sum([1 for col in ['EMA_signal', 'RSI_signal', 'BB_signal'] if col in latest.index])
+            max_signals = max(available_indicators, 1)  # Avoid division by zero
+
+            if buy_signals > sell_signals:
+                signal = 'BUY'
+                strength = (buy_signals / max_signals) * 100
+            elif sell_signals > buy_signals:
+                signal = 'SELL'
+                strength = (sell_signals / max_signals) * 100
+            else:
+                signal = 'HOLD'
+                strength = 0
+
+            return {
+                'signal': signal,
+                'strength': strength,
+                'reasons': reasons,
+                'components': {
+                    'ema_signal': latest.get('EMA_signal', 0),
+                    'rsi_condition': 'neutral',
+                    'bb_position': 'NEUTRAL'
                 }
+            }
 
-        # Check for RSI extreme reversals
-        rsi_values = data['RSI_14'].tail(10)
-        if len(rsi_values) >= 5:
-            current_rsi = rsi_values.iloc[-1]
-            prev_rsi = rsi_values.iloc[-2]
-
-            # RSI moving away from extreme levels
-            if (prev_rsi < 30 and current_rsi > 35) or (prev_rsi > 70 and current_rsi < 65):
-                return {
-                    'reversal_detected': True,
-                    'direction': 'from_oversold' if prev_rsi < 30 else 'from_overbought',
-                    'strength': 70
+        except Exception as e:
+            logger.warning(f"Failed to generate signal with limited data: {e}")
+            return {
+                'signal': 'HOLD',
+                'strength': 0,
+                'reasons': ['Error in limited data signal generation'],
+                'components': {
+                    'ema_signal': 0,
+                    'rsi_condition': 'neutral',
+                    'bb_position': 'NEUTRAL'
                 }
+            }
 
-        return {'reversal_detected': False, 'direction': None, 'strength': 0}
+    def detect_trend_reversal(self, data):
+        """
+        Detect trend reversals using multiple indicators with enhanced logic.
+        """
+        import config
+
+        if len(data) < 20:
+            return {'reversal_detected': False, 'direction': None, 'strength': 0, 'reasons': []}
+
+        # Get current signal components
+        signal_info = self.generate_signal(data)
+        current_signal = signal_info['signal']
+        strength = signal_info['strength']
+
+        # Enhanced reversal detection
+        reversal_detected = False
+        direction = None
+        reversal_strength = 0
+        reasons = []
+
+        # 1. Strong opposite signal with high strength
+        if current_signal == 'SELL' and strength >= config.TREND_REVERSAL_STRENGTH:
+            # Check if previous trend was bullish (EMA fast > slow)
+            recent_ema_fast = data['EMA_12'].tail(10).mean()
+            recent_ema_slow = data['EMA_26'].tail(10).mean()
+            if recent_ema_fast > recent_ema_slow:
+                reversal_detected = True
+                direction = 'bullish_to_bearish'
+                reversal_strength = strength
+                reasons.append(f"Strong SELL signal ({strength:.1f}%) vs bullish EMA trend")
+
+        elif current_signal == 'BUY' and strength >= config.TREND_REVERSAL_STRENGTH:
+            # Check if previous trend was bearish (EMA fast < slow)
+            recent_ema_fast = data['EMA_12'].tail(10).mean()
+            recent_ema_slow = data['EMA_26'].tail(10).mean()
+            if recent_ema_fast < recent_ema_slow:
+                reversal_detected = True
+                direction = 'bearish_to_bullish'
+                reversal_strength = strength
+                reasons.append(f"Strong BUY signal ({strength:.1f}%) vs bearish EMA trend")
+
+        # 2. RSI divergence signals with enhanced detection
+        if not reversal_detected and len(data) >= config.SIGNAL_EXIT_WEAKENING_WINDOW:
+            recent_prices = data['close'].tail(config.SIGNAL_EXIT_WEAKENING_WINDOW)
+            recent_rsi = data['RSI_14'].tail(config.SIGNAL_EXIT_WEAKENING_WINDOW)
+
+            # Check for bearish divergence (price higher, RSI lower)
+            price_trend = recent_prices.iloc[-1] - recent_prices.iloc[0]
+            rsi_trend = recent_rsi.iloc[-1] - recent_rsi.iloc[0]
+
+            if (price_trend > 0 and rsi_trend < 0 and
+                current_signal == 'SELL' and strength >= config.SIGNAL_EXIT_OPPOSITE_THRESHOLD):
+                reversal_detected = True
+                direction = 'bullish_to_bearish'
+                reversal_strength = strength * 1.2  # Boost strength for divergence
+                reasons.append(f"RSI bearish divergence with SELL signal ({strength:.1f}%)")
+
+            # Check for bullish divergence (price lower, RSI higher)
+            elif (price_trend < 0 and rsi_trend > 0 and
+                  current_signal == 'BUY' and strength >= config.SIGNAL_EXIT_OPPOSITE_THRESHOLD):
+                reversal_detected = True
+                direction = 'bearish_to_bullish'
+                reversal_strength = strength * 1.2  # Boost strength for divergence
+                reasons.append(f"RSI bullish divergence with BUY signal ({strength:.1f}%)")
+
+        # 3. Bollinger Band squeeze breakouts with momentum confirmation
+        if not reversal_detected:
+            current_bb_upper = data[f'BB_upper_{self.bb_period}'].iloc[-1]
+            current_bb_lower = data[f'BB_lower_{self.bb_period}'].iloc[-1]
+            current_bb_middle = data[f'BB_middle_{self.bb_period}'].iloc[-1]
+            current_price = data['close'].iloc[-1]
+
+            # Calculate BB squeeze (bandwidth)
+            bb_bandwidth = (current_bb_upper - current_bb_lower) / current_bb_middle
+            prev_bb_bandwidth = (data[f'BB_upper_{self.bb_period}'].iloc[-2] - data[f'BB_lower_{self.bb_period}'].iloc[-2]) / data[f'BB_middle_{self.bb_period}'].iloc[-2]
+
+            # Price breaking upper BB with bearish signal and expanding bands
+            if (current_price > current_bb_upper and
+                current_signal == 'SELL' and strength >= config.SIGNAL_EXIT_OPPOSITE_THRESHOLD and
+                bb_bandwidth > prev_bb_bandwidth):
+                reversal_detected = True
+                direction = 'bullish_to_bearish'
+                reversal_strength = strength * 1.1  # Slight boost for breakout
+                reasons.append(f"BB upper breakout with SELL signal and expanding bands ({strength:.1f}%)")
+
+            # Price breaking lower BB with bullish signal and expanding bands
+            elif (current_price < current_bb_lower and
+                  current_signal == 'BUY' and strength >= config.SIGNAL_EXIT_OPPOSITE_THRESHOLD and
+                  bb_bandwidth > prev_bb_bandwidth):
+                reversal_detected = True
+                direction = 'bearish_to_bullish'
+                reversal_strength = strength * 1.1  # Slight boost for breakout
+                reasons.append(f"BB lower breakout with BUY signal and expanding bands ({strength:.1f}%)")
+
+        # 4. Enhanced signal weakening detection
+        if not reversal_detected:
+            weakening_info = self._check_signal_weakening(data)
+            if weakening_info['weakening_detected']:
+                reversal_detected = True
+                direction = weakening_info['direction']
+                reversal_strength = weakening_info['strength']
+                reasons.extend(weakening_info['reasons'])
+
+        return {
+            'reversal_detected': reversal_detected,
+            'direction': direction,
+            'strength': reversal_strength,
+            'reasons': reasons
+        }
+
+    def _check_signal_weakening(self, data):
+        """
+        Enhanced signal weakening detection using multiple timeframes and indicators.
+        """
+        import config
+
+        if len(data) < config.SIGNAL_EXIT_WEAKENING_WINDOW + 5:
+            return {'weakening_detected': False, 'direction': None, 'strength': 0, 'reasons': []}
+
+        # Analyze signal strength over the weakening window
+        signal_history = []
+        for i in range(config.SIGNAL_EXIT_WEAKENING_WINDOW):
+            idx = len(data) - config.SIGNAL_EXIT_WEAKENING_WINDOW + i
+            if idx >= 0:
+                window_data = data.iloc[idx:idx+1]
+                prepared_data = self.prepare_data(window_data)
+                signal_info = self.generate_signal(prepared_data)
+                signal_history.append({
+                    'signal': signal_info['signal'],
+                    'strength': signal_info['strength'],
+                    'timestamp': data.index[idx]
+                })
+
+        if len(signal_history) < 3:
+            return {'weakening_detected': False, 'direction': None, 'strength': 0, 'reasons': []}
+
+        # Check for consistent signal weakening
+        current_signal = signal_history[-1]['signal']
+        current_strength = signal_history[-1]['strength']
+
+        # Calculate strength trend
+        strengths = [s['strength'] for s in signal_history]
+        strength_trend = strengths[-1] - strengths[0]  # Current minus oldest
+
+        # Check if signal has weakened significantly
+        if (current_strength < config.SIGNAL_EXIT_STRENGTH_DROP and
+            strength_trend < -config.SIGNAL_EXIT_STRENGTH_DROP):
+
+            # Determine direction based on current signal
+            direction = None
+            reasons = []
+
+            if current_signal == 'SELL':
+                direction = 'bullish_to_bearish'
+                reasons.append(f"SELL signal weakened from {strengths[0]:.1f}% to {current_strength:.1f}%")
+            elif current_signal == 'BUY':
+                direction = 'bearish_to_bullish'
+                reasons.append(f"BUY signal weakened from {strengths[0]:.1f}% to {current_strength:.1f}%")
+
+            # Additional checks for confirmation
+            if len(data) >= 10:
+                # Check if EMA alignment is breaking
+                recent_ema_fast = data['EMA_12'].tail(5).mean()
+                recent_ema_slow = data['EMA_26'].tail(5).mean()
+
+                if current_signal == 'SELL' and recent_ema_fast < recent_ema_slow:
+                    reasons.append("EMA alignment confirms weakening SELL signal")
+                elif current_signal == 'BUY' and recent_ema_fast > recent_ema_slow:
+                    reasons.append("EMA alignment confirms weakening BUY signal")
+
+            return {
+                'weakening_detected': True,
+                'direction': direction,
+                'strength': current_strength,
+                'reasons': reasons
+            }
+
+        return {'weakening_detected': False, 'direction': None, 'strength': 0, 'reasons': []}
 
     def should_close_position(self, position_type, current_signal, signal_strength, reversal_info, news_sentiment, position_age):
         """
