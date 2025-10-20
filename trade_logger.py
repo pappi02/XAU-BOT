@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
+<<<<<<< HEAD
 """
 Persistent trade logging using SQLite database.
 Logs all trades, positions, and P&L for analysis and dashboard.
@@ -38,6 +39,13 @@ class TradeLogger:
                 "best_trade": best_trade,
                 "worst_trade": worst_trade
             }
+=======
+class TradeLogger:
+    """
+    Persistent trade logging using SQLite database.
+    Logs all trades, positions, and P&L for analysis and dashboard.
+    """
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
     def __init__(self, db_path: str = "trades.db"):
         self.db_path = db_path
@@ -218,13 +226,20 @@ class TradeLogger:
 
     def get_trade_history(self, limit: int = 100) -> List[Dict]:
         """
+<<<<<<< HEAD
         Get recent trade history (including AUTO_CLOSED trades).
+=======
+        Get recent trade history.
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM trades
+<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
+=======
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
                 ORDER BY timestamp DESC
                 LIMIT ?
             ''', (limit,))
@@ -249,14 +264,22 @@ class TradeLogger:
 
     def get_total_pnl(self) -> float:
         """
+<<<<<<< HEAD
         Get total P&L across all closed trades (including AUTO_CLOSED).
+=======
+        Get total P&L across all closed trades.
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT COALESCE(SUM(pnl), 0) as total_pnl
                 FROM trades
+<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
+=======
+                WHERE status = 'CLOSED'
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
             ''')
 
             result = cursor.fetchone()

@@ -1,11 +1,15 @@
 import requests
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from config import NEWS_API_KEY
+<<<<<<< HEAD
 from datetime import datetime, timedelta
+=======
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
 # Initialize VADER sentiment analyzer
 analyzer = SentimentIntensityAnalyzer()
 
+<<<<<<< HEAD
 # Cache for news data to avoid rate limits
 news_cache = {
     'data': None,
@@ -38,14 +42,28 @@ def get_latest_forex_news():
         # Calculate date 24 hours ago for recent news only
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
+=======
+def get_latest_forex_news():
+    """
+    Fetch latest forex-related news from NewsAPI and analyze sentiment using VADER.
+
+    Returns:
+        str: Sentiment analysis result ('bullish', 'bearish', or 'neutral')
+    """
+    try:
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         url = "https://newsapi.org/v2/everything"
         params = {
             "q": "gold OR USD OR forex OR XAU",
             "apiKey": NEWS_API_KEY,
             "sortBy": "publishedAt",
             "language": "en",
+<<<<<<< HEAD
             "pageSize": 30,  # Get last 30 articles for better analysis
             "from": yesterday  # Only news from last 24 hours
+=======
+            "pageSize": 30  # Get last 30 articles for better analysis
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         }
 
         response = requests.get(url, params=params)
@@ -54,6 +72,7 @@ def get_latest_forex_news():
         articles = response.json().get("articles", [])
 
         if not articles:
+<<<<<<< HEAD
             result = {
                 'sentiment': 'neutral',
                 'available': False,
@@ -144,6 +163,38 @@ def get_latest_forex_news():
                 'avg_sentiment_score': 0.0,
                 'reason': f'Error fetching news: {str(e)}'
             }
+=======
+            return "neutral"
+
+        # Analyze sentiment using VADER
+        compound_scores = []
+
+        for article in articles:
+            title = article.get("title", "")
+            description = article.get("description", "") if article.get("description") else ""
+
+            # Combine title and description for analysis
+            text = title + ". " + description
+
+            # Get sentiment scores
+            sentiment = analyzer.polarity_scores(text)
+            compound_scores.append(sentiment['compound'])
+
+        # Calculate average compound score
+        avg_compound = sum(compound_scores) / len(compound_scores) if compound_scores else 0
+
+        # Classify sentiment based on average compound score
+        if avg_compound >= 0.05:
+            return "bullish"
+        elif avg_compound <= -0.05:
+            return "bearish"
+        else:
+            return "neutral"
+
+    except Exception as e:
+        print(f"News fetch error: {e}")
+        return "neutral"
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
 if __name__ == "__main__":
     # Test the news reader

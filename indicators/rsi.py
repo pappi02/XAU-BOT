@@ -48,7 +48,11 @@ def add_rsi_signals(data, period=14, overbought=70, oversold=30, column='close')
     df = data.copy()
 
     # Calculate RSI
+<<<<<<< HEAD
     df[f'RSI_{period}'] = calculate_rsi(df, period, column).rolling(3).mean()
+=======
+    df[f'RSI_{period}'] = calculate_rsi(df, period, column)
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
     # Generate signals
     df['RSI_signal'] = 0

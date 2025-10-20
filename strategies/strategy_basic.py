@@ -56,7 +56,11 @@ class BasicTradingStrategy:
 
     def generate_signal(self, data):
         """
+<<<<<<< HEAD
         Generate trading signal based on combined indicators with enhanced scoring logic.
+=======
+        Generate trading signal based on combined indicators.
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
         Args:
             data (pd.DataFrame): OHLC data with indicators
@@ -80,6 +84,7 @@ class BasicTradingStrategy:
         # Get current values
         latest = data.iloc[-1]
 
+<<<<<<< HEAD
         # Get actual indicator values
         ema_fast_val = latest.get(f'EMA_{self.ema_fast}', latest['close'])
         ema_slow_val = latest.get(f'EMA_{self.ema_slow}', latest['close'])
@@ -169,6 +174,69 @@ class BasicTradingStrategy:
             f"🧩 Signal Debug — EMA_fast={ema_fast_val:.2f}, EMA_slow={ema_slow_val:.2f}, RSI={rsi_val:.2f}, "
             f"Buy_Score={buy_score}, Sell_Score={sell_score}, Signal={signal}, Strength={strength}%"
         )
+=======
+        # Initialize signal components
+        buy_signals = 0
+        sell_signals = 0
+        reasons = []
+
+        # EMA Analysis
+        ema_signal = latest.get('EMA_signal', 0)
+        ema_crossover = latest.get('EMA_crossover', 0)
+
+        if ema_signal == 1:
+            buy_signals += 1
+            reasons.append("EMA bullish")
+        elif ema_signal == -1:
+            sell_signals += 1
+            reasons.append("EMA bearish")
+
+        if ema_crossover == 1:
+            buy_signals += 1  # Additional weight for crossover
+            reasons.append("EMA bullish crossover")
+        elif ema_crossover == -1:
+            sell_signals += 1
+            reasons.append("EMA bearish crossover")
+
+        # RSI Analysis
+        rsi_signal = latest.get('RSI_signal', 0)
+        rsi_condition = get_rsi_condition(data, self.rsi_period)
+
+        if rsi_signal == 1:  # Oversold
+            buy_signals += 1
+            reasons.append("RSI oversold")
+        elif rsi_signal == -1:  # Overbought
+            sell_signals += 1
+            reasons.append("RSI overbought")
+
+        # Bollinger Bands Analysis
+        bb_signal = latest.get('BB_signal', 0)
+        bb_position = get_bollinger_position(data, self.bb_period, self.bb_std)
+
+        if bb_signal == 1:  # Price touched lower band
+            buy_signals += 1
+            reasons.append("Price at lower Bollinger Band")
+        elif bb_signal == -1:  # Price touched upper band
+            sell_signals += 1
+            reasons.append("Price at upper Bollinger Band")
+
+        # Maximum possible signals (3 indicators)
+        max_signals = 3
+
+        # Determine overall signal
+        total_buy = buy_signals
+        total_sell = sell_signals
+
+        if total_buy > total_sell:
+            signal = 'BUY'
+            strength = (total_buy / max_signals) * 100  # Strength as percentage
+        elif total_sell > total_buy:
+            signal = 'SELL'
+            strength = (total_sell / max_signals) * 100
+        else:
+            signal = 'HOLD'
+            strength = 0
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
         return {
             'signal': signal,
@@ -178,11 +246,14 @@ class BasicTradingStrategy:
                 'ema_signal': ema_signal,
                 'rsi_condition': rsi_condition,
                 'bb_position': bb_position
+<<<<<<< HEAD
             },
             'scaling_factors': {
                 'trend_alignment': 1 if ema_signal == (1 if signal == 'BUY' else -1) else -1,
                 'momentum_strength': min(abs(ema_signal) * 0.5 + (1 if rsi_condition in ['bullish', 'bearish'] else 0) * 0.3 + (1 if bb_signal != 0 else 0) * 0.2, 1.0),
                 'volatility_adjustment': 1.0 / (1 + (self.bb_std / close) * 2) if self.bb_std > 0 else 1.0
+=======
+>>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
             }
         }
 
