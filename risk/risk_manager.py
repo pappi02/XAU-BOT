@@ -40,12 +40,12 @@ class RiskManager:
         return self.daily_pnl
 
     def check_daily_loss_limit(self):
-        self.update_daily_pnl()
         account = self.refresh_account()
         balance = float(account.balance)
-        allowed = balance * self.config.MAX_DAILY_LOSS_PCT
-        logger.debug(f"Daily pnl: {self.daily_pnl:.2f}, allowed: {allowed:.2f}")
-        return abs(self.daily_pnl) < allowed
+        profit = float(account.profit)  # floating P&L
+        allowed_loss = balance * self.config.MAX_DAILY_LOSS_PCT
+        logger.debug(f"Floating P&L: {profit:.2f}, allowed loss: {allowed_loss:.2f}")
+        return profit > -allowed_loss
 
     def enough_balance(self):
         account = self.refresh_account()
