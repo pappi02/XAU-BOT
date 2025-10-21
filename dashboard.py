@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
-<<<<<<< HEAD
 import requests
-=======
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 from datetime import datetime
 import MetaTrader5 as mt5
 from trade_logger import trade_logger
