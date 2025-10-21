@@ -1,6 +1,7 @@
 import math
 from datetime import datetime, timedelta, timezone
 from logger_config import setup_logger
+from margin_check import safe_margin_check, get_safe_lot
 logger = setup_logger()
 
 class RiskManager:
@@ -50,6 +51,36 @@ class RiskManager:
     def enough_balance(self):
         account = self.refresh_account()
         return float(account.balance) >= self.config.MIN_ACCOUNT_BALANCE
+
+    def check_margin_for_trade(self, symbol, volume, price, sl_price):
+        """
+        Check if there's sufficient margin for a trade using safe margin check.
+
+        Args:
+            symbol (str): Trading symbol
+            volume (float): Lot size
+            price (float): Entry price
+            sl_price (float): Stop loss price
+
+        Returns:
+            bool: True if sufficient margin, False otherwise
+        """
+        try:
+            # Use safe margin check from margin_check.py
+            ok, margin_required = safe_margin_check(symbol, volume)
+            if not ok:
+                logger.warning(f"Insufficient margin for {volume} lots @ {price}")
+                return False
+
+            account = self.refresh_account()
+            free_margin = float(account.margin_free)
+            logger.debug(f"Margin required: {margin_required:.2f}, Free margin: {free_margin:.2f}")
+
+            return free_margin >= margin_required
+
+        except Exception as e:
+            logger.error(f"Error checking margin: {str(e)}")
+            return False
 
     def current_open_positions_count(self, symbol):
         positions = self.mt5.positions_get(symbol=symbol)

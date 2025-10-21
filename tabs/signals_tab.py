@@ -3,112 +3,21 @@ import datetime
 
 def render_tab(tab, config, get_candles, add_ema_signals, add_rsi_signals, add_bollinger_signals, BasicTradingStrategy):
     with tab:
-        # ======= 🎨 Enhanced Styling =======
-        st.markdown("""
-        <style>
-        .signal-container {
-            background: linear-gradient(145deg, #121826, #1c2333);
-            border-radius: 18px;
-            padding: 28px 32px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
-            border: 1.5px solid rgba(72, 133, 237, 0.4);
-            margin-bottom: 20px;
-        }
-        .signal-title {
-            font-size: 36px;
-            font-weight: 800;
-            color: #4a90e2;
-            text-align: center;
-            letter-spacing: -0.02em;
-            margin-bottom: 10px;
-        }
-        .signal-time {
-            color: #b0b8ca;
-            font-size: 15px;
-            text-align: center;
-            margin-bottom: 25px;
-        }
-        .signal-main {
-            text-align: center;
-            padding: 20px;
-        }
-        .signal-action {
-            font-size: 60px;
-            font-weight: 900;
-            color: #00ff88;
-            text-shadow: 0 2px 15px rgba(0,255,136,0.3);
-        }
-        .signal-strength {
-            font-size: 22px;
-            color: #fff;
-            margin-top: 8px;
-            font-weight: 500;
-        }
-        .signal-confidence {
-            font-size: 18px;
-            margin-top: 5px;
-            color: #ffa500;
-        }
-        .metric-container {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 22px;
-            margin-top: 25px;
-        }
-        .metric-card {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 14px;
-            padding: 18px 24px;
-            min-width: 170px;
-            text-align: center;
-            border: 1px solid rgba(72,133,237,0.4);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-            transition: 0.2s;
-        }
-        .metric-card:hover {
-            transform: translateY(-2px);
-            background: rgba(255,255,255,0.08);
-        }
-        .metric-label {
-            font-size: 14px;
-            color: #b8d4f0;
-            margin-bottom: 4px;
-        }
-        .metric-value {
-            font-size: 20px;
-            font-weight: 700;
-            color: #00ff88;
-        }
-        .metric-value.negative { color: #ff5555; }
-        .metric-value.neutral { color: #ffa500; }
-        .signal-insights {
-            margin-top: 25px;
-            font-size: 16px;
-            color: #d0d4e0;
-            line-height: 1.6;
-            background: rgba(255,255,255,0.05);
-            padding: 20px;
-            border-radius: 10px;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+        # ======= HEADER =======
+        st.markdown("### 📊 Advanced Signal Analysis")
+        with st.container():
+            col_sig1, col_sig2 = st.columns([2, 1])
+            with col_sig1:
+                timeframe_signal = st.selectbox(
+                    "Select Analysis Timeframe",
+                    ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
+                    index=2,
+                    key="signals_tab_timeframe"
+                )
+            with col_sig2:
+                st.button("🔄 Refresh Signals", use_container_width=True, on_click=st.rerun)
 
-        # ======= 🔍 Signal UI Layout =======
-        st.subheader("📊 Advanced Signal Analysis")
-        col_sig1, col_sig2 = st.columns(2)
-        with col_sig1:
-            timeframe_signal = st.selectbox(
-                "Select Analysis Timeframe",
-                ["M1", "M5", "M15", "H1", "H4", "D1"],
-                index=2,
-                key="signals_tab_timeframe"
-            )
-        with col_sig2:
-            if st.button("🔄 Refresh Signals"):
-                st.rerun()
-
-        # ======= 📡 Check Connection =======
+        # ======= CONNECTION CHECK =======
         if not st.session_state.get('connected', False):
             st.warning("⚠️ MT5 not connected — connect to fetch signals.")
             return
@@ -119,7 +28,7 @@ def render_tab(tab, config, get_candles, add_ema_signals, add_rsi_signals, add_b
                 st.info("No signal data available for the selected timeframe.")
                 return
 
-            # ======= 🧠 Process Signal =======
+            # ======= STRATEGY PROCESS =======
             signal_data = candles.copy()
             signal_data = add_ema_signals(signal_data)
             signal_data = add_rsi_signals(signal_data)
@@ -129,72 +38,82 @@ def render_tab(tab, config, get_candles, add_ema_signals, add_rsi_signals, add_b
             prepared_data = strategy.prepare_data(signal_data.tail(50))
             signal = strategy.generate_signal(prepared_data)
 
-            # ======= 💡 Display Main Signal =======
-            st.markdown('<div class="signal-container">', unsafe_allow_html=True)
-            st.markdown('<div class="signal-title">Market Signal Overview</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="signal-time">Generated on {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>', unsafe_allow_html=True)
-
+            # ======= MAIN SIGNAL CARD =======
             signal_icons = {'BUY': '📈', 'SELL': '📉', 'HOLD': '⏸️'}
-            signal_colors = {'BUY': '#00ff88', 'SELL': '#ff5555', 'HOLD': '#ffa500'}
+            signal_colors = {'BUY': 'text-green-400', 'SELL': 'text-red-400', 'HOLD': 'text-yellow-400'}
             signal_text = signal.get("signal", "Unknown")
+            signal_strength = signal.get("strength", 0)
 
             st.markdown(f"""
-            <div class="signal-main">
-                <div class="signal-action" style="color:{signal_colors.get(signal_text, '#fff')}">
-                    {signal_icons.get(signal_text, '')} {signal_text}
+            <div class="bg-gradient-to-br from-[#0f172a] to-[#1e293b] rounded-2xl p-8 border border-sky-500/30 shadow-lg mb-6">
+                <div class="text-center mb-2 text-sky-400 text-2xl font-bold tracking-tight">
+                    Market Signal Overview
                 </div>
-                <div class="signal-strength">Signal Strength: {signal.get("strength", 0):.1f}%</div>
-                <div class="signal-confidence">Confidence Level: <b>{"High" if signal["strength"]>70 else "Medium" if signal["strength"]>40 else "Low"}</b></div>
+                <div class="text-center text-gray-400 text-sm mb-6">
+                    Generated on {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                </div>
+                <div class="text-center py-4">
+                    <div class="text-5xl font-extrabold {signal_colors.get(signal_text, 'text-white')}">
+                        {signal_icons.get(signal_text, '')} {signal_text}
+                    </div>
+                    <div class="text-lg text-white mt-2">Signal Strength: {signal_strength:.1f}%</div>
+                    <div class="text-sm text-amber-400 mt-1 font-medium">
+                        Confidence Level: <b>{"High" if signal_strength>70 else "Medium" if signal_strength>40 else "Low"}</b>
+                    </div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
-            # ======= 🧩 Detailed Metrics =======
+            # ======= METRIC GRID =======
             if "components" in signal:
                 comps = signal["components"]
-                st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+                st.markdown('<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">', unsafe_allow_html=True)
+
+                def metric_card(label, value, color_class="text-emerald-400"):
+                    st.markdown(f"""
+                    <div class="bg-white/5 rounded-xl p-4 text-center border border-sky-500/20 hover:bg-white/10 transition-all">
+                        <div class="text-sm text-sky-300 mb-1">{label}</div>
+                        <div class="text-xl font-semibold {color_class}">{value}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 # EMA
                 ema_signal = comps.get('ema_signal', 0)
                 ema_trend = 'Bullish' if ema_signal == 1 else 'Bearish' if ema_signal == -1 else 'Neutral'
-                ema_color = 'metric-value' + ('' if ema_signal == 1 else ' negative' if ema_signal == -1 else ' neutral')
-                st.markdown(f'<div class="metric-card"><div class="metric-label">EMA Trend</div><div class="{ema_color}">{ema_trend}</div></div>', unsafe_allow_html=True)
+                metric_card("EMA Trend", ema_trend,
+                            "text-emerald-400" if ema_signal == 1 else "text-red-400" if ema_signal == -1 else "text-yellow-400")
 
                 # RSI
                 rsi = comps.get('rsi_condition', 'Neutral').capitalize()
-                rsi_color = 'metric-value' + ('' if rsi == 'Bullish' else ' negative' if rsi == 'Bearish' else ' neutral')
-                st.markdown(f'<div class="metric-card"><div class="metric-label">RSI Condition</div><div class="{rsi_color}">{rsi}</div></div>', unsafe_allow_html=True)
+                metric_card("RSI Condition", rsi,
+                            "text-emerald-400" if rsi == 'Bullish' else "text-red-400" if rsi == 'Bearish' else "text-yellow-400")
 
-                # Bollinger Bands
+                # Bollinger
                 bb = comps.get('bb_signal', 'Neutral').capitalize()
-                bb_color = 'metric-value' + ('' if bb == 'Bullish' else ' negative' if bb == 'Bearish' else ' neutral')
-                st.markdown(f'<div class="metric-card"><div class="metric-label">BB Signal</div><div class="{bb_color}">{bb}</div></div>', unsafe_allow_html=True)
+                metric_card("BB Signal", bb,
+                            "text-emerald-400" if bb == 'Bullish' else "text-red-400" if bb == 'Bearish' else "text-yellow-400")
 
-                # Confluence Score
-                conf_score = comps.get('confluence', 0)
-                st.markdown(f'<div class="metric-card"><div class="metric-label">Confluence Score</div><div class="metric-value">{conf_score:.1f}</div></div>', unsafe_allow_html=True)
+                # Confluence
+                metric_card("Confluence Score", f"{comps.get('confluence', 0):.1f}")
 
                 # Risk Bias
-                risk_bias = comps.get('risk_bias', 'Balanced')
-                st.markdown(f'<div class="metric-card"><div class="metric-label">Risk Bias</div><div class="metric-value neutral">{risk_bias}</div></div>', unsafe_allow_html=True)
+                metric_card("Risk Bias", comps.get('risk_bias', 'Balanced'), "text-amber-400")
 
-                # Position Sizing Factor
-                sizing = comps.get('size_factor', 1.0)
-                st.markdown(f'<div class="metric-card"><div class="metric-label">Position Size Factor</div><div class="metric-value">{sizing:.2f}x</div></div>', unsafe_allow_html=True)
+                # Sizing
+                metric_card("Position Size", f"{comps.get('size_factor', 1.0):.2f}x")
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # ======= 📘 Insights Section =======
+            # ======= INSIGHTS =======
             st.markdown("""
-            <div class="signal-insights">
-                <b>Signal Interpretation:</b><br>
-                • A <b>BUY</b> signal suggests a potential upward move. Consider scaling in gradually, especially if RSI confirms momentum.<br>
-                • A <b>SELL</b> signal implies downward bias — ideal for pullback entries or short continuation setups.<br>
-                • A <b>HOLD</b> signal means conditions are indecisive. Wait for more confluence or confirmation before entering.<br><br>
-                <b>Additional Tip:</b> Always validate the signal on a higher timeframe and monitor volatility before increasing position size.
+            <div class="bg-white/5 border border-sky-500/20 rounded-xl p-5 text-gray-300 text-[15px] leading-relaxed">
+                <div class="text-sky-300 font-semibold mb-2">📘 Signal Interpretation:</div>
+                • <b>BUY</b> suggests a potential upward move — scale in gradually if RSI confirms momentum.<br>
+                • <b>SELL</b> implies downward bias — ideal for pullbacks or short continuation setups.<br>
+                • <b>HOLD</b> means indecision — wait for more confluence or confirmation.<br><br>
+                <b class="text-amber-400">Pro Tip:</b> Always confirm with a higher timeframe and volatility before increasing position size.
             </div>
             """, unsafe_allow_html=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"⚠️ Error loading signals: {str(e)}")

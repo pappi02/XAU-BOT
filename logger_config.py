@@ -10,4 +10,5 @@ def setup_logger(name="xau_bot", level="INFO"):
         fmt = "%(asctime)s - %(levelname)s - %(message)s"
         ch.setFormatter(logging.Formatter(fmt))
         logger.addHandler(ch)
+    logger.propagate = False  # Prevent duplicate logs by not propagating to root logger
     return logger

@@ -3,49 +3,11 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
-<<<<<<< HEAD
-"""
-Persistent trade logging using SQLite database.
-Logs all trades, positions, and P&L for analysis and dashboard.
-"""
-
-class TradeLogger:
-    def compute_statistics(self) -> dict:
-        """
-        Compute trading statistics: total trades, win rate, avg profit, total pnl, best/worst trade.
-        Returns:
-            dict: Statistics summary
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            # Get all closed trades with non-null pnl (including AUTO_CLOSED)
-            cursor.execute('''
-                SELECT pnl FROM trades WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
-            ''')
-            pnls = [row[0] for row in cursor.fetchall()]
-            total_trades = len(pnls)
-            total_pnl = sum(pnls) if pnls else 0.0
-            win_trades = len([p for p in pnls if p > 0])
-            loss_trades = len([p for p in pnls if p < 0])
-            win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0.0
-            avg_profit = (total_pnl / total_trades) if total_trades > 0 else 0.0
-            best_trade = max(pnls) if pnls else 0.0
-            worst_trade = min(pnls) if pnls else 0.0
-            return {
-                "total_trades": total_trades,
-                "win_rate": win_rate,
-                "avg_profit": avg_profit,
-                "total_pnl": total_pnl,
-                "best_trade": best_trade,
-                "worst_trade": worst_trade
-            }
-=======
 class TradeLogger:
     """
     Persistent trade logging using SQLite database.
     Logs all trades, positions, and P&L for analysis and dashboard.
     """
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
     def __init__(self, db_path: str = "trades.db"):
         self.db_path = db_path
@@ -105,6 +67,36 @@ class TradeLogger:
             ''')
 
             conn.commit()
+
+    def compute_statistics(self) -> dict:
+        """
+        Compute trading statistics: total trades, win rate, avg profit, total pnl, best/worst trade.
+        Returns:
+            dict: Statistics summary
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Get all closed trades with non-null pnl (including AUTO_CLOSED)
+            cursor.execute('''
+                SELECT pnl FROM trades WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
+            ''')
+            pnls = [row[0] for row in cursor.fetchall()]
+            total_trades = len(pnls)
+            total_pnl = sum(pnls) if pnls else 0.0
+            win_trades = len([p for p in pnls if p > 0])
+            loss_trades = len([p for p in pnls if p < 0])
+            win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0.0
+            avg_profit = (total_pnl / total_trades) if total_trades > 0 else 0.0
+            best_trade = max(pnls) if pnls else 0.0
+            worst_trade = min(pnls) if pnls else 0.0
+            return {
+                "total_trades": total_trades,
+                "win_rate": win_rate,
+                "avg_profit": avg_profit,
+                "total_pnl": total_pnl,
+                "best_trade": best_trade,
+                "worst_trade": worst_trade
+            }
 
     def log_trade_entry(self, symbol: str, side: str, entry_price: float,
                        volume: float, stop_loss: Optional[float] = None,
@@ -226,20 +218,13 @@ class TradeLogger:
 
     def get_trade_history(self, limit: int = 100) -> List[Dict]:
         """
-<<<<<<< HEAD
         Get recent trade history (including AUTO_CLOSED trades).
-=======
-        Get recent trade history.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM trades
-<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
-=======
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
                 ORDER BY timestamp DESC
                 LIMIT ?
             ''', (limit,))
@@ -264,22 +249,14 @@ class TradeLogger:
 
     def get_total_pnl(self) -> float:
         """
-<<<<<<< HEAD
         Get total P&L across all closed trades (including AUTO_CLOSED).
-=======
-        Get total P&L across all closed trades.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT COALESCE(SUM(pnl), 0) as total_pnl
                 FROM trades
-<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
-=======
-                WHERE status = 'CLOSED'
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
             ''')
 
             result = cursor.fetchone()

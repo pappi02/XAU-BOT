@@ -1,0 +1,19 @@
+credentials:
+  usernames:
+    admin:
+      email: admin@gmail.com
+      name: Admin
+      password: REMOVED_BCRYPT_HASH
+    user:
+      email: user@gmail.com
+      name: User
+      password: REMOVED_BCRYPT_HASH
+
+cookie:
+  name: trading_bot_auth
+  key: CHANGE_ME
+  expiry_days: 30
+
+preauthorized:
+  emails:
+    - admin@gmail.com
