@@ -1,15 +1,62 @@
 import time
 import random
+import sqlite3
+import numpy as np
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from logger_config import setup_logger
-from smart_risk import calculate_adaptive_lot, get_safe_lot
+from risk.smart_risk import calculate_adaptive_lot, get_safe_lot
+
+class AdaptiveExposureController:
+    def __init__(self, config, logger):
+        self.config = config
+        self.logger = logger
+        self.dynamic_exposure = config.BASE_MAX_TOTAL_EXPOSURE_MULTIPLIER
+
+    def update_dynamic_exposure(self, balance, volatility, recent_performance, signal_strength):
+        """
+        Dynamically adjust exposure multiplier based on real-time factors.
+        """
+
+        base = self.config.BASE_MAX_TOTAL_EXPOSURE_MULTIPLIER
+
+        # 1️⃣ Account Balance Scaling
+        balance_factor = 1 + (balance * self.config.EXPOSURE_BALANCE_SENSITIVITY)
+        balance_factor = np.clip(balance_factor, 0.8, 1.3)
+
+        # 2️⃣ Volatility Adjustment (ATR or StdDev)
+        vol_factor = 1 / max(0.8, min(volatility, 2.5))  # high vol = lower exposure
+        vol_factor *= self.config.EXPOSURE_VOLATILITY_SENSITIVITY
+
+        # 3️⃣ Performance Adjustment
+        if recent_performance < 0:
+            perf_factor = 1 - abs(recent_performance) * self.config.EXPOSURE_PERFORMANCE_SENSITIVITY
+        else:
+            perf_factor = 1 + abs(recent_performance) * 0.2
+        perf_factor = np.clip(perf_factor, 0.6, 1.4)
+
+        # 4️⃣ Signal Confidence Factor
+        conf_factor = 1 + (signal_strength / 100) * 0.4  # high signal = slightly higher exposure
+        conf_factor = np.clip(conf_factor, 0.8, 1.4)
+
+        # 🧠 Combine dynamically
+        new_exposure = base * balance_factor * vol_factor * perf_factor * conf_factor
+        new_exposure = np.clip(
+            new_exposure,
+            self.config.MIN_EXPOSURE_MULTIPLIER,
+            self.config.MAX_EXPOSURE_MULTIPLIER
+        )
+
+        # Update internal value
+        self.dynamic_exposure = round(new_exposure, 2)
+        self.logger.info(f"⚙️ Adaptive Exposure Updated → {self.dynamic_exposure}x based on conditions.")
+        return self.dynamic_exposure
 
 logger = setup_logger()
 MAGIC = 987654321
 
 class TradeExecutor:
-    def __init__(self, mt5_module=None, config=None, risk_manager=None):
+    def __init__(self, mt5_module=None, config=None, risk_manager=None, market_analyzer=None, signal_analyzer=None):
         if mt5_module is None:
             from unittest.mock import Mock
             self.mt5 = Mock()
@@ -98,11 +145,33 @@ class TradeExecutor:
         else:
             self.risk_manager = risk_manager
 
+        if market_analyzer is None:
+            self.market_analyzer = type('MockMarketAnalyzer', (), {'get_recent_volatility': lambda self, symbol: 20})()
+        else:
+            self.market_analyzer = market_analyzer
+
+        if signal_analyzer is None:
+            self.signal_analyzer = type('MockSignalAnalyzer', (), {'get_trend_confidence': lambda self, symbol: 0.8})()
+        else:
+            self.signal_analyzer = signal_analyzer
+
         # Track signal history for candle confirmation
         self.signal_history = []
 
         # Track scaling information for positions
         self.position_scaling_data = {}  # ticket -> scaling info
+
+        # Track scaling failures for cooldown
+        self.scaling_failures = 0
+        self.scaling_cooldown_until = 0  # timestamp when cooldown ends
+
+        # Dynamic scaling attributes
+        self.signal_persistence_counter = 0
+        self.last_scaling_time = 0
+
+        # Simple performance tracker for recent trades
+        self.recent_performance = []  # list of (profit, timestamp) tuples
+        self.max_recent_trades = 10  # track last 10 trades
 
         # Initialize scaling data for existing positions
         if mt5_module is not None:
@@ -197,8 +266,9 @@ class TradeExecutor:
             raise RuntimeError("Account balance too low")
         if not self.risk_manager.check_daily_loss_limit():
             raise RuntimeError("Daily loss limit reached")
-        if self.risk_manager.current_open_positions_count(symbol) >= self.config.MAX_CONCURRENT_POSITIONS:
-            raise RuntimeError("Max concurrent positions reached")
+        # Dynamic scaling: Check if new position should be opened based on signal conditions
+        # This replaces the fixed MAX_CONCURRENT_POSITIONS check
+        # The actual limit is determined dynamically in should_open_new_position
 
         # Ensure symbol is selected before checking margin
         if not self.mt5.symbol_select(symbol, True):
@@ -229,6 +299,20 @@ class TradeExecutor:
                     'scaling_history': []
                 }
                 logger.info(f"Initialized scaling data for position {ticket}")
+
+                # Log the trade entry with ticket
+                from trade_logger import trade_logger
+                trade_logger.log_trade_entry(
+                    symbol=symbol,
+                    side="BUY" if is_buy else "SELL",
+                    entry_price=entry_price,
+                    volume=lots,
+                    stop_loss=stop_price,
+                    take_profit=tp_price,
+                    strategy="basic",
+                    notes=f"Auto trade entry",
+                    ticket=ticket
+                )
 
         return result
 
@@ -301,6 +385,7 @@ class TradeExecutor:
         volume = pos.volume
         is_buy = pos.type == self.mt5.POSITION_TYPE_BUY
         symbol = pos.symbol
+        pnl = pos.profit  # Capture P&L before closing
 
         order_type = self.mt5.ORDER_TYPE_SELL if is_buy else self.mt5.ORDER_TYPE_BUY
         tick = self.mt5.symbol_info_tick(symbol)
@@ -308,14 +393,14 @@ class TradeExecutor:
             logger.error(f"No tick data for {symbol}")
             return False
 
-        price = float(tick.bid if is_buy else tick.ask)
+        exit_price = float(tick.bid if is_buy else tick.ask)
         req = {
             "action": self.mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
             "volume": volume,
             "type": order_type,
             "position": ticket,
-            "price": price,
+            "price": exit_price,
             "deviation": self.config.ORDER_DEVIATION,
             "magic": MAGIC,
             "comment": "Manual close",
@@ -325,9 +410,28 @@ class TradeExecutor:
         res = self.mt5.order_send(req)
         if res.retcode == self.mt5.TRADE_RETCODE_DONE:
             logger.info(f"Successfully closed position {ticket}: {res}")
+            # Log trade exit to database
+            try:
+                from trade_logger import trade_logger
+                # Find trade_id by ticket
+                with sqlite3.connect(trade_logger.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM trades WHERE ticket = ? AND status = 'OPEN'", (ticket,))
+                    result = cursor.fetchone()
+                    if result:
+                        trade_id = result[0]
+                        trade_logger.log_trade_exit(trade_id, exit_price, pnl, "Manual close")
+                        logger.info(f"Logged trade exit for ticket {ticket}: exit_price={exit_price}, pnl={pnl}")
+            except Exception as e:
+                logger.error(f"Failed to log trade exit for ticket {ticket}: {e}")
             # Clean up scaling data
             if ticket in self.position_scaling_data:
                 del self.position_scaling_data[ticket]
+
+            # Track recent performance
+            self.recent_performance.append((pnl, time.time()))
+            self.recent_performance = self.recent_performance[-self.max_recent_trades:]
+
             return True
         else:
             logger.error(f"Failed to close position {ticket}: {res}")
@@ -575,6 +679,132 @@ class TradeExecutor:
         logger.info(f"Applying break-even SL for position {position.ticket}: Entry {position.price_open:.5f}, New SL {new_sl:.5f}, Buffer {base_buffer:.1f} pips")
         return self.modify_trade_sl(position, new_sl)
 
+    def apply_trailing_stop(self, position, current_price):
+        """
+        Applies trailing stop to a position based on current price.
+        """
+        new_sl = self._check_trailing_stop(position, current_price)
+        if new_sl:
+            return self.modify_trade_sl(position, new_sl)
+        return False
+
+    def smart_adaptive_trailing(self, position, candles):
+        """
+        Enhanced dynamic trailing that avoids whipsaws and adapts to candle structure.
+        """
+        if not self.config.SMART_TRAILING_ENABLED:
+            return
+
+        symbol = position.symbol
+        now = datetime.now()
+
+        # Prevent too-frequent updates
+        last_update = getattr(position, "last_trail_update", None)
+        if last_update and (now - last_update).total_seconds() < self.config.SMART_TRAILING_COOLDOWN:
+            return
+
+        # Extract recent candle data
+        closes = np.array([c['close'] for c in candles])
+        highs = np.array([c['high'] for c in candles])
+        lows = np.array([c['low'] for c in candles])
+
+        atr = np.mean(highs[-self.config.SMART_TRAILING_ATR_LOOKBACK:] - lows[-self.config.SMART_TRAILING_ATR_LOOKBACK:])
+        last_close = closes[-1]
+
+        current_price = self.mt5.symbol_info_tick(symbol).bid if position.type == 0 else self.mt5.symbol_info_tick(symbol).ask
+        entry_price = position.price_open
+
+        profit_points = abs(current_price - entry_price) / self.mt5.symbol_info(symbol).point
+        if profit_points < self.config.DYNAMIC_TRAILING_START_PROFIT:
+            return
+
+        # Check direction confirmation (N candles in favor)
+        if position.type == 0:  # BUY
+            favor_candles = sum(1 for i in range(-self.config.SMART_TRAILING_CANDLE_CONFIRMATION, 0)
+                                if closes[i] > closes[i-1])
+        else:  # SELL
+            favor_candles = sum(1 for i in range(-self.config.SMART_TRAILING_CANDLE_CONFIRMATION, 0)
+                                if closes[i] < closes[i-1])
+
+        if favor_candles < self.config.SMART_TRAILING_CANDLE_CONFIRMATION:
+            # Skip tightening until trend persists
+            return
+
+        # Calculate safety buffer (avoid trailing too close)
+        recent_swing_low = np.min(lows[-self.config.SMART_TRAILING_SWING_LOOKBACK:])
+        recent_swing_high = np.max(highs[-self.config.SMART_TRAILING_SWING_LOOKBACK:])
+
+        if position.type == 0:
+            buffer_zone = (atr * self.config.SMART_TRAILING_BUFFER_MULTIPLIER)
+            new_sl = max(position.sl, recent_swing_low - buffer_zone)
+            if new_sl > position.sl and (current_price - new_sl) > atr * 0.3:
+                self.mt5.order_modify(position.ticket, sl=new_sl)
+                position.last_trail_update = now
+                self.logger.info(f"🧠 SMART TRAILING → BUY SL updated to {new_sl:.2f}")
+        else:
+            buffer_zone = (atr * self.config.SMART_TRAILING_BUFFER_MULTIPLIER)
+            new_sl = min(position.sl, recent_swing_high + buffer_zone)
+            if new_sl < position.sl and (new_sl - current_price) > atr * 0.3:
+                self.mt5.order_modify(position.ticket, sl=new_sl)
+                position.last_trail_update = now
+                self.logger.info(f"🧠 SMART TRAILING → SELL SL updated to {new_sl:.2f}")
+
+    def update_dynamic_trailing_stop(self, position, df, signal_strength, trend_confidence):
+        """
+        Dynamically adjusts trailing stop loss based on volatility, signal strength, and trend persistence.
+        """
+
+        symbol = position.symbol
+        atr = self.market_analyzer.get_atr(symbol, period=14) if hasattr(self.market_analyzer, 'get_atr') else 5.0
+        current_price = self.mt5.symbol_info_tick(symbol).bid if position.type == self.mt5.POSITION_TYPE_BUY else self.mt5.symbol_info_tick(symbol).ask
+
+        # --- Normalize Inputs ---
+        normalized_signal = min(max(signal_strength / 100, 0.1), 1.0)
+        normalized_trend = min(max(trend_confidence, 0.1), 1.0)
+        normalized_atr = max(atr, 1e-3)
+
+        # --- Adaptive Trailing Logic ---
+        # Base trail factor — tighter for high-confidence signals
+        base_trail = normalized_atr * (1.5 - normalized_signal * 0.8)
+
+        # Adjust for trend confidence (tighter in weaker trends)
+        adaptive_trail = base_trail * (1.2 - normalized_trend * 0.5)
+
+        # Compute the proposed trailing stop price
+        if position.type == self.mt5.POSITION_TYPE_BUY:
+            new_sl = max(position.sl, current_price - adaptive_trail)
+        else:
+            new_sl = min(position.sl, current_price + adaptive_trail)
+
+        # --- Trailing Conditions ---
+        profit_pips = (current_price - position.price_open) * 100 if position.type == self.mt5.POSITION_TYPE_BUY else (position.price_open - current_price) * 100
+
+        if profit_pips > 5:  # Start trailing only when trade is slightly profitable
+            sl_distance = abs(current_price - new_sl)
+            min_trail_distance = normalized_atr * 0.5
+
+            if sl_distance > min_trail_distance:
+                request = {
+                    "action": self.mt5.TRADE_ACTION_SLTP,
+                    "position": position.ticket,
+                    "symbol": symbol,
+                    "sl": round(new_sl, 3),
+                    "tp": position.tp,
+                }
+
+                result = self.mt5.order_send(request)
+                if result.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    logger.info(f"🔁 Updated dynamic SL for {symbol} | New SL={new_sl:.3f} | ATR={atr:.2f} | Profit={profit_pips:.1f} pips")
+                else:
+                    logger.warning(f"⚠️ Failed to update dynamic SL for {symbol}: {result.comment}")
+
+        # Breakeven logic
+        if profit_pips > (normalized_atr * 2):
+            if position.type == self.mt5.POSITION_TYPE_BUY and position.sl < position.price_open:
+                request["sl"] = position.price_open
+                self.mt5.order_send(request)
+                logger.info(f"🟢 Moved SL to breakeven for {symbol} | Profit: {profit_pips:.1f} pips")
+
     def modify_trade_sl(self, position, new_sl):
         """
         Safely updates SL without triggering premature closure.
@@ -608,7 +838,7 @@ class TradeExecutor:
 
             result = self.mt5.order_send(request)
             if result.retcode == self.mt5.TRADE_RETCODE_DONE:
-                logger.info(f"✅ Trailing SL updated for position {position.ticket} → {new_sl:.2f}")
+                logger.info(f"✅ Trailing SL updated for position {position.ticket} → SL={new_sl:.2f}")
                 return True
             else:
                 logger.error(f"❌ Failed SL update for {position.ticket}: {result.comment}")
@@ -617,8 +847,6 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"❌ Exception updating SL for {position.ticket}: {str(e)}")
             return False
-
-        return {'should_close': False, 'reason': None}
 
     def _check_take_profit_reached(self, position, current_price):
         if position.tp == 0:
@@ -706,6 +934,116 @@ class TradeExecutor:
         correlated_positions = [p for p in positions if p.symbol != symbol]
         return len(symbol_positions) + len(correlated_positions) > config.MAX_CORRELATED_POSITIONS
 
+    def normalize_lot_size(self, volume):
+        """
+        Normalizes lot size to be within broker constraints and step size.
+
+        Args:
+            volume (float): Raw volume to normalize
+
+        Returns:
+            float: Normalized volume, or None if below minimum
+        """
+        if volume <= 0:
+            return None
+
+        # Round to step size
+        normalized = round(volume / self.config.LOT_STEP) * self.config.LOT_STEP
+
+        # Ensure within bounds
+        normalized = max(self.config.MIN_LOT_SIZE, min(self.config.MAX_LOT_SIZE, normalized))
+
+        # If normalized volume is below minimum, return None
+        if normalized < self.config.MIN_LOT_SIZE:
+            return None
+
+        return normalized
+
+    def get_dynamic_scaling_ratio(self, loss_pips, atr_value=None, trend_strength=None):
+        """
+        Calculates dynamic scaling ratio based on market conditions.
+
+        Args:
+            loss_pips (float): Current loss in pips
+            atr_value (float, optional): Current ATR value
+            trend_strength (float, optional): Current trend strength (0-100)
+
+        Returns:
+            float: Scaling ratio (0.1 to 0.8)
+        """
+        base_ratio = 0.5  # Default 50%
+
+        # Adjust based on loss severity
+        if loss_pips <= -50:  # Heavy loss
+            base_ratio = 0.3  # Scale down more aggressively
+        elif loss_pips <= -20:  # Moderate loss
+            base_ratio = 0.4
+        elif loss_pips <= -10:  # Light loss
+            base_ratio = 0.45
+        else:  # Small loss or profit
+            base_ratio = 0.5
+
+        # ATR adjustment (higher volatility = smaller scaling)
+        if atr_value:
+            if atr_value > 20:  # High volatility
+                base_ratio *= 0.8
+            elif atr_value > 10:  # Moderate volatility
+                base_ratio *= 0.9
+
+        # Trend strength adjustment (stronger trend = larger scaling)
+        if trend_strength is not None:
+            if trend_strength > 70:  # Strong trend
+                base_ratio *= 1.1
+            elif trend_strength < 40:  # Weak trend
+                base_ratio *= 0.9
+
+        # Ensure within bounds
+        return max(0.1, min(0.8, base_ratio))
+
+    def compute_dynamic_scaling_interval(self, signal_strength, volatility, trend_confidence):
+        """
+        Computes dynamic scaling interval based on market conditions.
+
+        Args:
+            signal_strength (float): Current signal strength (0-100)
+            volatility (float): Recent volatility measure
+            trend_confidence (float): Trend confidence score (0-1)
+
+        Returns:
+            float: Dynamic scaling interval in seconds
+        """
+        base_interval = 300  # 5 minutes base
+
+        # Adjust based on signal strength (stronger signals = shorter wait)
+        if signal_strength > 80:
+            signal_multiplier = 0.5  # 50% faster scaling
+        elif signal_strength > 60:
+            signal_multiplier = 0.75
+        else:
+            signal_multiplier = 1.0
+
+        # Adjust based on volatility (higher volatility = longer wait)
+        if volatility > 30:
+            volatility_multiplier = 1.5  # 50% longer wait
+        elif volatility > 15:
+            volatility_multiplier = 1.2
+        else:
+            volatility_multiplier = 1.0
+
+        # Adjust based on trend confidence (higher confidence = shorter wait)
+        if trend_confidence > 0.8:
+            trend_multiplier = 0.7  # 30% faster
+        elif trend_confidence > 0.6:
+            trend_multiplier = 0.85
+        else:
+            trend_multiplier = 1.0
+
+        # Calculate final interval
+        dynamic_interval = base_interval * signal_multiplier * volatility_multiplier * trend_multiplier
+
+        # Ensure reasonable bounds
+        return max(60, min(1800, dynamic_interval))  # Between 1 minute and 30 minutes
+
     def evaluate_position_scaling(self, position, current_data, strategy, news_sentiment, atr_value=None):
         """
         Evaluates whether to scale up or down a position based on market conditions.
@@ -726,6 +1064,7 @@ class TradeExecutor:
             return {'action': 'hold', 'reason': 'scaling_disabled'}
 
         position_type = 'BUY' if position.type == self.mt5.POSITION_TYPE_BUY else 'SELL'
+        symbol = position.symbol
         current_price = current_data['close'].iloc[-1] if len(current_data) > 0 else position.price_current
         position_age = int(time.time() - position.time)
 
@@ -745,13 +1084,26 @@ class TradeExecutor:
             self.position_scaling_data[position.ticket] = scaling_data
             logger.info(f"Initialized scaling data for position {position.ticket} during evaluation")
 
-        # Check time since last scaling
+        # Get signal information first to compute dynamic interval
+        signal_info = strategy.generate_signal(current_data)
+        current_signal = signal_info['signal']
+        signal_strength = signal_info['strength']
+        scaling_factors = signal_info.get('scaling_factors', {})
+
+        # Check time since last scaling with dynamic interval
         time_since_last_scale = time.time() - scaling_data['last_scaling_time']
-        if time_since_last_scale < self.config.SCALING_MIN_TIME_BETWEEN_ADDS:
+        # --- Dynamic adaptive scaling interval ---
+        volatility = self.market_analyzer.get_recent_volatility(symbol) if hasattr(self.market_analyzer, 'get_recent_volatility') else 20
+        trend_confidence = self.signal_analyzer.get_trend_confidence(symbol) if hasattr(self.signal_analyzer, 'get_trend_confidence') else 0.8
+        adaptive_interval = self.compute_dynamic_scaling_interval(signal_strength, volatility, trend_confidence)
+
+        if time_since_last_scale < adaptive_interval:
+            logger.info(f"⏱ Waiting before scaling again (elapsed: {time_since_last_scale:.1f}s, required: {adaptive_interval:.1f}s)")
             return {'action': 'hold', 'reason': 'too_soon_since_last_scale'}
 
-        # Check max time since entry
-        if position_age > self.config.SCALING_MAX_TIME_SINCE_ENTRY:
+        # Check max time since entry (dynamic based on market conditions)
+        dynamic_max_time = config.get_dynamic_scaling_max_time_since_entry(signal_strength, atr_value, trend_confidence)
+        if position_age > dynamic_max_time:
             return {'action': 'hold', 'reason': 'too_old_for_scaling'}
 
         # Check max additional positions
@@ -760,15 +1112,9 @@ class TradeExecutor:
 
         # Check total exposure limit
         total_exposure = scaling_data['total_volume'] * position.price_open
-        max_exposure = scaling_data['original_volume'] * position.price_open * self.config.MAX_TOTAL_EXPOSURE_MULTIPLIER
+        max_exposure = scaling_data['original_volume'] * position.price_open * self.config.BASE_MAX_TOTAL_EXPOSURE_MULTIPLIER
         if total_exposure >= max_exposure:
             return {'action': 'hold', 'reason': 'max_exposure_reached'}
-
-        # Get signal information
-        signal_info = strategy.generate_signal(current_data)
-        current_signal = signal_info['signal']
-        signal_strength = signal_info['strength']
-        scaling_factors = signal_info.get('scaling_factors', {})
 
         # Calculate profit/loss in pips
         profit_pips = (
@@ -850,7 +1196,7 @@ class TradeExecutor:
             # Calculate additional lot size
             base_additional_lots = scaling_data['original_volume'] * self.config.SCALING_LOT_SIZE_MULTIPLIER
             additional_lots = min(base_additional_lots, self.config.MAX_LOT_SIZE)
-
+            additional_lots = max(additional_lots, self.config.MIN_LOT_SIZE)
             return {
                 'action': 'scale_up',
                 'additional_lots': additional_lots,
@@ -1042,6 +1388,71 @@ class TradeExecutor:
         else:
             logger.error(f"Failed to close partial position {ticket}: {res}")
             return False
+
+    def should_open_new_position(self, signal_strength, trend_score, news_score, spread):
+        """
+        Determines if a new position should be opened based on dynamic scaling logic.
+        This method implements the discretionary trader behavior for position sizing.
+
+        Args:
+            signal_strength (float): Current signal strength (0-100)
+            trend_score (float): Current trend score (0-100)
+            news_score (float): Current news sentiment score (-1 to 1)
+            spread (float): Current spread in points
+
+        Returns:
+            dict: Decision with 'should_open', 'max_positions', 'reason'
+        """
+        import config
+
+        # Check if dynamic scaling is enabled
+        if not config.ADAPTIVE_SCALING_ENABLED:
+            return {
+                'should_open': True,
+                'max_positions': config.MAX_CONCURRENT_POSITIONS,
+                'reason': 'scaling_disabled'
+            }
+
+        current_positions = len(self.get_open_positions())
+        current_time = time.time()
+
+        # Immediate execution on 100% signal with favorable conditions
+        if signal_strength >= 100:
+            if trend_score > 60 and news_score > -0.1 and spread < 30:
+                logger.info(f"Immediate execution: 100% signal with favorable conditions (trend:{trend_score}, news:{news_score}, spread:{spread})")
+                return {
+                    'should_open': True,
+                    'max_positions': config.MAX_CONCURRENT_POSITIONS,
+                    'reason': 'immediate_100pct_favorable'
+                }
+
+        # Gradual scaling on mixed conditions with persistence
+        if signal_strength >= 90:
+            # Check signal persistence
+            if self.signal_persistence_counter >= config.CONFIRMATION_CANDLE_WINDOW:
+                # Check cooldown
+                if current_time - self.last_scaling_time >= config.SCALING_DELAY_SECONDS:
+                    # Allow expansion up to dynamic limit
+                    max_allowed = min(config.DYNAMIC_SCALING_EXPAND_LIMIT, config.MAX_CONCURRENT_POSITIONS)
+                    if current_positions < max_allowed:
+                        logger.info(f"Gradual scaling: {self.signal_persistence_counter} persistent signals, expanding to {max_allowed}")
+                        return {
+                            'should_open': True,
+                            'max_positions': max_allowed,
+                            'reason': 'gradual_scaling_persistence'
+                        }
+
+        # Reset persistence counter if signal weakens
+        if signal_strength < config.SIGNAL_PERSISTENCE_THRESHOLD * 100:
+            if self.signal_persistence_counter > 0:
+                logger.info(f"Signal persistence reset: strength {signal_strength} < threshold {config.SIGNAL_PERSISTENCE_THRESHOLD * 100}")
+            self.signal_persistence_counter = 0
+
+        return {
+            'should_open': False,
+            'max_positions': current_positions,
+            'reason': 'conditions_not_met'
+        }
 
 # Legacy functions
 def execute_trade(symbol, signal, volume=0.02, magic=123456, comment="XAUUSD Auto Bot"):

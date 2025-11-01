@@ -28,6 +28,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Include UnoCSS runtime for styling across the app
+st.markdown('<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-uno.global.js"></script>', unsafe_allow_html=True)
+
 # ======= SESSION STATE =======
 if 'kill_switch' not in st.session_state:
     st.session_state.kill_switch = False
@@ -174,7 +177,7 @@ st.markdown("<div class='main-title'>📊 XAU/USD Automated Trading Bot Dashboar
 with st.sidebar:
     st.header("⚙️ Controls")
 
-    if st.button("🚨 EMERGENCY KILL SWITCH", use_container_width=True, type="primary"):
+    if st.button("🚨 EMERGENCY KILL SWITCH", width='stretch', type="primary"):
         kill_trading()
     if st.session_state.kill_switch:
         st.error("TRADING DISABLED")
@@ -437,7 +440,7 @@ with st.sidebar:
             st.subheader("Risk Settings")
             risk_pct = st.slider("Risk per Trade (%)", 0.1, 5.0, 1.0, 0.1, help="Percentage of balance to risk")
             max_positions = st.slider("Max Open Positions", 1, 10, 3, help="Maximum concurrent positions")
-            if st.button("Apply Strategy Settings", use_container_width=True):
+            if st.button("Apply Strategy Settings", width='stretch'):
                 st.success("✅ Strategy settings updated")
 
     # Manual Trade Control
@@ -456,32 +459,32 @@ with st.sidebar:
                 st.subheader("Bulk Operations")
                 col_bulk1, col_bulk2, col_bulk3 = st.columns(3)
                 with col_bulk1:
-                    if st.button("💰 Close All Profitable", use_container_width=True, help="Close all positions with positive profit"):
+                    if st.button("💰 Close All Profitable", width='stretch', help="Close all positions with positive profit"):
                         risk_mgr = RiskManager(mt5, config)
                         executor = TradeExecutor(mt5, config, risk_mgr)
                         closed_count = executor.close_profitable_positions(config.SYMBOL)
                         st.success(f"✅ Closed {closed_count} profitable positions")
                 with col_bulk2:
-                    if st.button("💸 Close All Loss", use_container_width=True, help="Close all positions with negative profit"):
+                    if st.button("💸 Close All Loss", width='stretch', help="Close all positions with negative profit"):
                         risk_mgr = RiskManager(mt5, config)
                         executor = TradeExecutor(mt5, config, risk_mgr)
                         closed_count = executor.close_loss_positions(config.SYMBOL)
                         st.success(f"✅ Closed {closed_count} loss positions")
                 with col_bulk3:
-                    if st.button("🚪 Close All Positions", use_container_width=True, help="Close all open positions"):
+                    if st.button("🚪 Close All Positions", width='stretch', help="Close all open positions"):
                         risk_mgr = RiskManager(mt5, config)
                         executor = TradeExecutor(mt5, config, risk_mgr)
                         closed_count = executor.close_all_positions(config.SYMBOL)
                         st.success(f"✅ Closed {closed_count} positions")
                 col_type1, col_type2 = st.columns(2)
                 with col_type1:
-                    if st.button("📈 Close All Buy", use_container_width=True, help="Close all BUY positions"):
+                    if st.button("📈 Close All Buy", width='stretch', help="Close all BUY positions"):
                         risk_mgr = RiskManager(mt5, config)
                         executor = TradeExecutor(mt5, config, risk_mgr)
                         closed_count = executor.close_buy_positions(config.SYMBOL)
                         st.success(f"✅ Closed {closed_count} BUY positions")
                 with col_type2:
-                    if st.button("📉 Close All Sell", use_container_width=True, help="Close all SELL positions"):
+                    if st.button("📉 Close All Sell", width='stretch', help="Close all SELL positions"):
                         risk_mgr = RiskManager(mt5, config)
                         executor = TradeExecutor(mt5, config, risk_mgr)
                         closed_count = executor.close_sell_positions(config.SYMBOL)
@@ -490,7 +493,7 @@ with st.sidebar:
                 st.subheader("Individual Position Close")
                 ticket_options = [f"{pos.ticket} ({pos.symbol} {pos.volume} lot)" for pos in positions]
                 selected_ticket = st.selectbox("Select Position to Close:", ticket_options, key="close_ticket_selector")
-                if st.button("Close Selected Position", use_container_width=True):
+                if st.button("Close Selected Position", width='stretch'):
                     ticket = int(selected_ticket.split()[0])
                     risk_mgr = RiskManager(mt5, config)
                     executor = TradeExecutor(mt5, config, risk_mgr)
@@ -509,7 +512,7 @@ with st.sidebar:
                     with col_entry2:
                         sl_price = st.number_input("Stop Loss", min_value=0.0, value=0.0, step=0.01, help="Stop loss price (0 = no SL)")
                         tp_price = st.number_input("Take Profit", min_value=0.0, value=0.0, step=0.01, help="Take profit price (0 = no TP)")
-                    if st.form_submit_button("Enter Trade", use_container_width=True):
+                    if st.form_submit_button("Enter Trade", width='stretch'):
                         try:
                             risk_mgr = RiskManager(mt5, config)
                             executor = TradeExecutor(mt5, config, risk_mgr)
@@ -543,7 +546,7 @@ with st.sidebar:
                             st.metric("Current Profit", f"${pos.profit:.2f}")
                         with col_adv2:
                             st.markdown("#### ⚙️ SL Management Actions")
-                            if st.button("🔄 Move to Break-even", key="breakeven_btn", use_container_width=True):
+                            if st.button("🔄 Move to Break-even", key="breakeven_btn", width='stretch'):
                                 try:
                                     risk_mgr = RiskManager(mt5, config)
                                     executor = TradeExecutor(mt5, config, risk_mgr)
@@ -554,7 +557,7 @@ with st.sidebar:
                                         st.info("ℹ️ Break-even conditions not met")
                                 except Exception as e:
                                     st.error(f"❌ Break-even failed: {str(e)}")
-                            if st.button("📈 Apply Trailing Stop", key="trailing_btn", use_container_width=True):
+                            if st.button("📈 Apply Trailing Stop", key="trailing_btn", width='stretch'):
                                 try:
                                     risk_mgr = RiskManager(mt5, config)
                                     executor = TradeExecutor(mt5, config, risk_mgr)
@@ -567,7 +570,7 @@ with st.sidebar:
                                 except Exception as e:
                                     st.error(f"❌ Trailing stop failed: {str(e)}")
                             partial_percentage = st.slider("Partial Close %", 10, 90, 25, 5, help="Percentage of position to close")
-                            if st.button("✂️ Partial Close", key="partial_btn", use_container_width=True):
+                            if st.button("✂️ Partial Close", key="partial_btn", width='stretch'):
                                 try:
                                     risk_mgr = RiskManager(mt5, config)
                                     executor = TradeExecutor(mt5, config, risk_mgr)
@@ -586,7 +589,7 @@ with st.sidebar:
                             new_sl = st.number_input("New Stop Loss", min_value=0.0, value=0.0, step=0.01, help="New SL price (0 = remove SL)")
                         with col_mod2:
                             new_tp = st.number_input("New Take Profit", min_value=0.0, value=0.0, step=0.01, help="New TP price (0 = remove TP)")
-                        if st.form_submit_button("Modify Position", use_container_width=True):
+                        if st.form_submit_button("Modify Position", width='stretch'):
                             try:
                                 ticket = int(selected_pos.split()[0])
                                 pos_details = mt5.positions_get(ticket=ticket)
@@ -619,10 +622,10 @@ with st.sidebar:
     with st.expander("⚡ Quick Actions", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔄 Refresh Data", use_container_width=True):
+            if st.button("🔄 Refresh Data", width='stretch'):
                 st.rerun()
         with col2:
-            if st.button("📊 Export Data", use_container_width=True):
+            if st.button("📊 Export Data", width='stretch'):
                 st.info("Export feature coming soon")
 
 # ======= MAIN DASHBOARD =======

@@ -56,11 +56,7 @@ class BasicTradingStrategy:
 
     def generate_signal(self, data):
         """
-<<<<<<< HEAD
-        Generate trading signal based on combined indicators with enhanced scoring logic.
-=======
-        Generate trading signal based on combined indicators.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
+        Generate trading signal based on combined indicators using UnifiedSignalGenerator.
 
         Args:
             data (pd.DataFrame): OHLC data with indicators
@@ -68,125 +64,34 @@ class BasicTradingStrategy:
         Returns:
             dict: Signal information with BUY, SELL, or HOLD
         """
-        if len(data) < max(self.ema_slow, self.rsi_period, self.bb_period):
-            # Provide default components to avoid KeyError in callers (UI/dashboard)
-            return {
-                'signal': 'HOLD',
-                'strength': 0,
-                'reasons': ['Not enough data'],
-                'components': {
-                    'ema_signal': 0,
-                    'rsi_condition': 'neutral',
-                    'bb_position': 'NEUTRAL'
-                }
-            }
+        from signal_generator import UnifiedSignalGenerator
 
-        # Get current values
-        latest = data.iloc[-1]
-
-        # Get actual indicator values
-        ema_fast_val = latest.get(f'EMA_{self.ema_fast}', latest['close'])
-        ema_slow_val = latest.get(f'EMA_{self.ema_slow}', latest['close'])
-        rsi_val = latest.get(f'RSI_{self.rsi_period}', 50)
-        close = latest['close']
-        upper = latest.get(f'BB_upper_{self.bb_period}', close)
-        lower = latest.get(f'BB_lower_{self.bb_period}', close)
-
-        # Compute signals for weighted scoring (standardized thresholds)
-        ema_signal = 1 if ema_fast_val > ema_slow_val else (-1 if ema_fast_val < ema_slow_val else 0)
-        rsi_condition = "bullish" if rsi_val < 30 else ("bearish" if rsi_val > 70 else "neutral")
-        # Stricter BB condition with trend alignment: BUY when price <= lower band AND EMA bullish, SELL when price >= upper band AND EMA bearish
-        bb_signal = 1 if ema_signal == 1 and close <= lower else (-1 if ema_signal == -1 and close >= upper else 0)
-
-        reasons = []
-        if ema_signal == 1:
-            reasons.append("Short-term trend bullish")
-        elif ema_signal == -1:
-            reasons.append("Short-term trend bearish")
-
-        if rsi_condition == "bullish":
-            reasons.append("RSI oversold")
-        elif rsi_condition == "bearish":
-            reasons.append("RSI overbought")
-
-        if bb_signal == 1:
-            reasons.append("Price below lower Bollinger Band")
-        elif bb_signal == -1:
-            reasons.append("Price above upper Bollinger Band")
-
-        # --- Enhanced weighted scoring logic (more trade-oriented) ---
-        ema_weight = 0.45  # Increased for trend priority
-        rsi_weight = 0.30  # Reduced for balance
-        bb_weight = 0.25  # Reduced for stricter conditions
-
-        buy_score = 0
-        sell_score = 0
-
-        # EMA scoring
-        if ema_signal == 1:
-            buy_score += ema_weight
-        elif ema_signal == -1:
-            sell_score += ema_weight
-
-        # RSI scoring (standardized thresholds)
-        if rsi_condition == "bullish":
-            buy_score += rsi_weight
-        elif rsi_condition == "bearish":
-            sell_score += rsi_weight
-
-        # BB scoring (relaxed conditions)
-        if bb_signal == 1:
-            buy_score += bb_weight
-        elif bb_signal == -1:
-            sell_score += bb_weight
-
-        # --- Additional nuanced BUY conditions for more natural trading ---
-        # EMA bullish + RSI not overbought = potential BUY
-        if ema_signal == 1 and rsi_val <= 70:
-            buy_score += 0.1  # Small bonus for natural bullish setup
-
-        # EMA bearish + RSI not oversold = potential SELL
-        if ema_signal == -1 and rsi_val >= 30:
-            sell_score += 0.1  # Small bonus for natural bearish setup
-
-        # --- Final decision with reduced tolerance for more trades ---
-        tolerance = 0.02  # Reduced from 0.05 to allow more signals
-        total = buy_score + sell_score
-        strength = round(abs(buy_score - sell_score) / total * 100, 2) if total > 0 else 0
-
-        if abs(buy_score - sell_score) < tolerance:
-            signal = "HOLD"
-        elif buy_score > sell_score:
-            signal = "BUY"
-        else:
-            signal = "SELL"
-
-        # Get components for backward compatibility (updated for consistency)
-        ema_signal = 1 if ema_fast_val > ema_slow_val else (-1 if ema_fast_val < ema_slow_val else 0)
-        rsi_condition = 'overbought' if rsi_val > 70 else ('oversold' if rsi_val < 30 else 'neutral')
-        bb_position = 'above_upper' if close >= upper else ('below_lower' if close <= lower else 'within_bands')
-
-        # Debug logging for signal analysis
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(
-            f"🧩 Signal Debug — EMA_fast={ema_fast_val:.2f}, EMA_slow={ema_slow_val:.2f}, RSI={rsi_val:.2f}, "
-            f"Buy_Score={buy_score}, Sell_Score={sell_score}, Signal={signal}, Strength={strength}%"
+        # Create unified signal generator with same parameters
+        generator = UnifiedSignalGenerator(
+            ema_fast=self.ema_fast,
+            ema_slow=self.ema_slow,
+            rsi_period=self.rsi_period,
+            bb_period=self.bb_period,
+            bb_std=self.bb_std
         )
 
+        # Generate unified signal
+        unified_signal = generator.generate_signal(data)
+
+        # Convert to format expected by existing code
         return {
-            'signal': signal,
-            'strength': strength,
-            'reasons': reasons,
+            'signal': unified_signal['signal'],
+            'strength': unified_signal['strength'],
+            'reasons': unified_signal['reasons'],
             'components': {
-                'ema_signal': ema_signal,
-                'rsi_condition': rsi_condition,
-                'bb_position': bb_position
+                'ema_signal': unified_signal['components']['technical']['ema_signal'],
+                'rsi_condition': unified_signal['components']['technical']['components']['rsi_condition'],
+                'bb_position': unified_signal['components']['technical']['components']['bb_position']
             },
             'scaling_factors': {
-                'trend_alignment': 1 if ema_signal == (1 if signal == 'BUY' else -1) else -1,
-                'momentum_strength': min(abs(ema_signal) * 0.5 + (1 if rsi_condition in ['bullish', 'bearish'] else 0) * 0.3 + (1 if bb_signal != 0 else 0) * 0.2, 1.0),
-                'volatility_adjustment': 1.0 / (1 + (self.bb_std / close) * 2) if self.bb_std > 0 else 1.0
+                'trend_alignment': 1.0,
+                'momentum_strength': 1.0,
+                'volatility_adjustment': 1.0
             }
         }
 

@@ -21,6 +21,8 @@ from utils.news_reader import get_latest_forex_news
 from execution.trade_executor import TradeExecutor
 from risk.risk_manager import RiskManager
 from trade_logger import trade_logger
+from patterns.symmetrical_triangle import SymmetricalTriangle
+from patterns.head_and_shoulders import detect_head_and_shoulders
 
 # Set up logger
 logger = setup_logger(level=LOG_LEVEL)
@@ -135,7 +137,18 @@ def main_loop():
             signal_info = strategy.generate_signal(df)
             signal, strength = signal_info['signal'], signal_info['strength']
 
+            # === Pattern Detection ===
+            # Convert DataFrame to list of dicts for pattern analysis
+            candles_list = df[['open', 'high', 'low', 'close']].to_dict('records')
+            pattern = SymmetricalTriangle(candles_list, timeframe=TIMEFRAME)
+            pattern_result = pattern.detect()
+
+            # Head & Shoulders detection
+            hs_pattern = detect_head_and_shoulders(df, price_col='close', lookback=300, debug=True)
+
             logger.info(f"📈 Signal: {signal} | Strength={strength:.1f}% | ATR={last_atr:.2f}")
+            logger.info(f"🔺 Pattern: SymmetricalTriangle | Detected={pattern_result['detected']} | Direction={pattern_result['direction']} | Confidence={pattern_result['confidence']:.2f}")
+            logger.info(f"🔺 Pattern: Head&Shoulders | Detected={hs_pattern['detected']} | Type={hs_pattern['type']} | Confidence={hs_pattern['confidence']:.2f} | Breakout={hs_pattern['breakout']}")
 
             # === News Adjustment ===
             news_data = get_latest_forex_news()

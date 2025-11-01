@@ -25,12 +25,24 @@ from config import *
 from data.connect_mt5 import connect_mt5, disconnect_mt5
 from data.fetch_candles import get_candles
 from strategies.strategy_basic import BasicTradingStrategy
+from strategies.strategy_selector import StrategySelector
 from utils.indicators import atr, dynamic_rr_ratio, dynamic_stop_loss
 from utils.news_reader_clean import get_latest_forex_news
 from execution.trade_executor import TradeExecutor
 from risk.risk_manager import RiskManager
-from trade_logger_clean import trade_logger
+from trade_logger import trade_logger
+from trade_sync import trade_sync
 from logger_config import setup_logger
+from patterns.double_top import detect_double_top
+from patterns.double_bottom import detect_double_bottom
+from patterns.head_and_shoulders import detect_head_and_shoulders
+from patterns.channels import detect_bullish_channel, detect_bearish_channel, detect_horizontal_channel
+from indicators.ema import calculate_ema
+from adaptive_engine import AdaptiveEngine, MarketData
+
+# Import new SQLite logger and sync functions
+import trade_logger_sqlite as tlog
+from sync_closed_trades import sync_closed_trades
 
 # KB imports
 from ingest_utils import extract_text_from_pdf, extract_text_from_docx, extract_text_from_image, chunk_text
@@ -46,7 +58,7 @@ logger = setup_logger(level=LOG_LEVEL)
 LOGIN = MT5_ACCOUNT
 PASSWORD = MT5_PASSWORD
 SERVER = MT5_SERVER
-SYMBOL = SYMBOL_PHASE5
+SYMBOL = SYMBOL
 TIMEFRAME = TIMEFRAME
 
 # -----------------------------
@@ -61,6 +73,11 @@ else:
 if not connect_mt5(LOGIN, PASSWORD, SERVER, MT5_TIMEOUT):
     print("❌ MT5 connection failed.")
     quit()
+
+# -----------------------------
+# 🗄️ Initialize SQLite Database for Trade Logging
+# -----------------------------
+sqlite_conn = tlog.init_db()
 
 # -----------------------------
 # ⚙️ Flask API for Dashboard
@@ -180,13 +197,15 @@ def signals():
         strategy = BasicTradingStrategy(ema_fast=EMA_FAST, ema_slow=EMA_SLOW, rsi_period=RSI_PERIOD,
                                         bb_period=BB_PERIOD, bb_std=BB_STD_DEV)
         df_prepared = strategy.prepare_data(df)
+        # Add EMA_20 for signals endpoint
+        df_prepared['EMA_20'] = calculate_ema(df_prepared, 20, 'close')
         signal_info = strategy.generate_signal(df_prepared)
 
         # Additional indicators for display
         df_prepared['ATR'] = compute_atr(df_prepared)
 
         last = df_prepared.iloc[-1]
-        ema20 = last.get('EMA_12', last['close'])  # fallback if not calculated
+        ema20 = last.get('EMA_20', last['close'])  # fallback if not calculated
         ema50 = last.get('EMA_26', last['close'])
         rsi = last.get('RSI_14', 50)
         upper = last.get('BB_upper_20', last['close'])
@@ -198,7 +217,7 @@ def signals():
         reasons = signal_info.get('reasons', [])
 
         print(f"🧭 SIGNAL DEBUG — {SYMBOL_LOCAL}")
-        print(f"EMA12={ema20:.2f}, EMA26={ema50:.2f}, RSI={rsi:.2f}, ATR={atr:.2f}")
+        print(f"EMA20={ema20:.2f}, EMA26={ema50:.2f}, RSI={rsi:.2f}, ATR={atr:.2f}")
         print(f"Signal={signal_info['signal']}, Strength={signal_info['strength']:.1f}%")
         print("Reasons:", "; ".join(reasons))
 
@@ -217,6 +236,11 @@ def signals():
         })
     except Exception as e:
         return jsonify({"error": str(e)})
+
+@app.route('/welcome')
+def welcome():
+    logger.info(f"Request received: {request.method} {request.path}")
+    return jsonify({'message': 'Welcome to the Flask API Service!'})
 
 # KB endpoints
 @app.route("/learn", methods=["POST"])
@@ -337,57 +361,270 @@ def trading_bot():
     strategy = BasicTradingStrategy(ema_fast=EMA_FAST, ema_slow=EMA_SLOW, rsi_period=RSI_PERIOD,
                                     bb_period=BB_PERIOD, bb_std=BB_STD_DEV)
 
+    # Initialize enhanced strategy selector
+    strategy_selector = StrategySelector(cooldown_sec=300, min_confidence=0.6)
+
+    # Initialize adaptive engine
+    adaptive_engine = AdaptiveEngine(config)
+
     last_signal = None
     last_signal_time = None
     min_hold_candles = 5  # Minimum 5 candles before allowing signal change
     last_scaling_check = 0  # Track last scaling check time
 
+    # Bot restart cooldown tracking
+    bot_start_time = time.time()
+    cooldown_seconds = config.RESTART_COOLDOWN_SECONDS
+
+    # Trade synchronization tracking
+    last_sync_time = 0
+    sync_interval = 300  # Sync every 5 minutes
+
+    # Cache candles to avoid duplicates
+    cached_candles = None
+    last_fetch_time = 0
+
     while True:
         try:
-            # Fetch data
-            timeframe_map = {
-                'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
-                'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4
-            }
-            mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), mt5.TIMEFRAME_M5)
-            df = get_candles(SYMBOL, mt5_timeframe, NUM_CANDLES)
+            # Fetch data with caching - FORCED M5 TIMEFRAME FOR AGGRESSIVE SCALPING
+            current_time = time.time()
+            if cached_candles is None or (current_time - last_fetch_time) > 30:  # Fetch every 30s
+                # FORCE M5 TIMEFRAME - No other timeframes allowed for scalping
+                mt5_timeframe = mt5.TIMEFRAME_M5
+                df = get_candles(SYMBOL, mt5_timeframe, NUM_CANDLES)
+                cached_candles = df
+                last_fetch_time = current_time
+                logger.info(f"✅ Successfully fetched {len(df) if df is not None else 0} candles for {SYMBOL} using M5 timeframe.")
+                logger.info("✅ Using M5 timeframe for aggressive scalping mode")
+            else:
+                df = cached_candles
+                logger.info("Using cached M5 candles")
 
             if df is None or df.empty:
                 logger.warning("⚠️ Empty data, retrying in 30s...")
                 time.sleep(30)
                 continue
 
-            df = strategy.prepare_data(df)
+            # Get news data for strategy selection
+            news_data = get_latest_forex_news()
+
+            # Query knowledge base for strategy guidance
+            # Note: We need basic data prep for initial KB query and strategy selection
+            df_temp = strategy.prepare_data(df)
+            current_rsi = df_temp['RSI_14'].iloc[-1] if 'RSI_14' in df_temp.columns else 50
+            atr_series = atr(df_temp, period=ATR_PERIOD)
+            last_atr = float(atr_series.iloc[-1]) if not pd.isna(atr_series.iloc[-1]) else 2.5
+            market_snapshot_text = f"symbol: {SYMBOL}, timeframe: {TIMEFRAME}, ema_fast: {EMA_FAST}, ema_slow: {EMA_SLOW}, rsi: {current_rsi:.2f}, atr: {last_atr:.2f}"
+            kb_results = retrieve_relevant_docs(market_snapshot_text, top_k=5)
+
+            # Use strategy selector to choose optimal strategy
+            selection_result = strategy_selector.select_strategy(
+                data=df_temp,
+                kb_results=kb_results,
+                signal_info={'signal': 'HOLD', 'strength': 50},  # Placeholder, will be updated
+                news_data=news_data
+            )
+
+            selected_strategy = selection_result['strategy_instance']
+            logger.info(f"Strategy Selector: {selection_result['selected_strategy']} (confidence: {selection_result['selection_info']['confidence']}%)")
+            logger.info(f"Regime: {selection_result['regime_info']['regime']} ({selection_result['regime_info']['confidence']}%)")
+
+            # Prepare data with selected strategy for signal generation
+            df = selected_strategy.prepare_data(df)
             atr_series = atr(df, period=ATR_PERIOD)
             last_atr = float(atr_series.iloc[-1]) if not pd.isna(atr_series.iloc[-1]) else 2.5
 
-            signal_info = strategy.generate_signal(df)
+            # Use selected strategy to generate signal
+            signal_info = selected_strategy.generate_signal(df)
             signal, strength = signal_info['signal'], signal_info['strength']
+            logger.info(f"Signal generated using {selection_result['selected_strategy']} strategy")
 
-            # Signal Confirmation and Minimum Hold Logic
+            # Pattern Recognition Integration
+            double_top_pattern = detect_double_top(df)
+            double_bottom_pattern = detect_double_bottom(df)
+            head_and_shoulders_pattern = detect_head_and_shoulders(df)
+            bullish_channel_pattern = detect_bullish_channel(df)
+            bearish_channel_pattern = detect_bearish_channel(df)
+            horizontal_channel_pattern = detect_horizontal_channel(df)
+
+            # FINAL SIGNAL DECISION ENGINE
+            # 1. Get technical signal (ensure it's a string)
+            technical_signal = signal_info.get('components', {}).get('ema_signal', 0)
+            if isinstance(technical_signal, (int, float)):
+                technical_signal = "BUY" if technical_signal == 1 else "SELL" if technical_signal == -1 else "HOLD"
+            elif not isinstance(technical_signal, str):
+                technical_signal = "HOLD"
+
+            # 2. Determine pattern signal
+            pattern_signal = None
+            pattern_strength = 0
+
+            # Check for strong patterns that should override technical signals
+            if double_top_pattern.get('detected', False) and double_top_pattern.get('confidence', 0) > 0.7:
+                pattern_signal = "SELL"  # Bearish reversal
+                pattern_strength = double_top_pattern['confidence'] * 100
+                logger.info(f"Double Top pattern detected (confidence: {double_top_pattern['confidence']:.1f})")
+            elif double_bottom_pattern.get('detected', False) and double_bottom_pattern.get('confidence', 0) > 0.7:
+                pattern_signal = "BUY"  # Bullish reversal
+                pattern_strength = double_bottom_pattern['confidence'] * 100
+                logger.info(f"Double Bottom pattern detected (confidence: {double_bottom_pattern['confidence']:.1f})")
+            elif head_and_shoulders_pattern.get('detected', False) and head_and_shoulders_pattern.get('confidence', 0) > 0.7:
+                pattern_signal = "SELL"  # Bearish reversal
+                pattern_strength = head_and_shoulders_pattern['confidence'] * 100
+                logger.info(f"Head and Shoulders pattern detected (confidence: {head_and_shoulders_pattern['confidence']:.1f})")
+            elif bullish_channel_pattern.get('detected', False) and bullish_channel_pattern.get('confidence', 0) > 0.6:
+                pattern_signal = "BUY"  # Bullish continuation
+                pattern_strength = bullish_channel_pattern['confidence'] * 100
+                logger.info(f"Bullish Channel pattern detected (confidence: {bullish_channel_pattern['confidence']:.1f})")
+            elif bearish_channel_pattern.get('detected', False) and bearish_channel_pattern.get('confidence', 0) > 0.6:
+                pattern_signal = "SELL"  # Bearish continuation
+                pattern_strength = bearish_channel_pattern['confidence'] * 100
+                logger.info(f"Bearish Channel pattern detected (confidence: {bearish_channel_pattern['confidence']:.1f})")
+
+            # 3. Aggressive mode: Allow strong pattern signals to trade even without technical confirmation
+            final_signal = "HOLD"
+            final_strength = strength
+
+            if pattern_strength >= 70:  # Strong pattern signal (>=0.7 confidence)
+                final_signal = pattern_signal
+                final_strength = pattern_strength
+                logger.info(f"Aggressive mode: Allowing trade based on strong pattern signal ({pattern_strength:.1f}%)")
+            elif technical_signal in ["BUY", "SELL"] and pattern_signal in ["BUY", "SELL"]:
+                if technical_signal == pattern_signal:
+                    final_signal = technical_signal
+                    final_strength = max(strength, pattern_strength)  # Use higher strength
+                    logger.info(f"Technical + Pattern agreement: {final_signal} (strength: {final_strength:.1f}%)")
+                else:
+                    final_signal = "HOLD"
+                    final_strength = 0
+                    logger.info(f"Signal conflict: Technical {technical_signal} vs Pattern {pattern_signal} → HOLD")
+            elif technical_signal in ["BUY", "SELL"]:
+                final_signal = "HOLD"
+                final_strength = 0
+                logger.info(f"Technical signal {technical_signal} but no pattern confirmation → HOLD")
+            else:
+                final_signal = "HOLD"
+                final_strength = 0
+                logger.info("No clear signal from either technical or pattern analysis - HOLD")
+
+            # 4. Apply horizontal channel adjustment (reduce strength in ranging markets)
+            if horizontal_channel_pattern.get('detected', False) and horizontal_channel_pattern.get('confidence', 0) > 0.5:
+                final_strength *= 0.8
+                logger.info(f"Horizontal Channel detected → Reducing signal strength to {final_strength:.1f}%")
+
+            # Update signal and strength
+            signal = final_signal
+            strength = final_strength
+
+            # Calculate dynamic market factors for adaptive engine
+            # Trend strength: based on EMA crossover or signal components
+            trend_strength = signal_info.get('components', {}).get('trend_strength', 0.5)
+            if isinstance(trend_strength, str):
+                trend_strength = 1.0 if trend_strength == "BUY" else -1.0 if trend_strength == "SELL" else 0.0
+            trend_strength = abs(trend_strength)  # Normalize to 0-1
+
+            # Volatility: ATR as percentage of current price
+            current_price = df['close'].iloc[-1]
+            volatility = (last_atr / current_price) if current_price > 0 else 0.0
+            # Cap volatility to reasonable range
+            volatility = min(volatility, 0.1)  # Max 10% volatility
+
+            # News impact: based on sentiment score and availability
+            news_impact = news_data.get('avg_sentiment_score', 0.0) if news_data.get('available', False) else 0.0
+            # Scale news impact based on sentiment strength
+            if news_data.get('sentiment') in ['bullish', 'bearish']:
+                news_impact = min(news_impact * 1.5, 1.0)  # Amplify strong sentiments
+
+            # Adaptive Engine Integration
+            market_data = MarketData(
+                symbol=SYMBOL,
+                timeframe=TIMEFRAME,
+                current_price=current_price,
+                atr=last_atr,
+                rsi=current_rsi,
+                volume=df['tick_volume'].iloc[-1] if 'tick_volume' in df.columns else 0,
+                signal=signal,
+                strength=strength,
+                news_sentiment=news_data.get('sentiment', 'neutral'),
+                regime=selection_result.get('regime_info', {}).get('regime', 'unknown'),
+                trend_strength=trend_strength,
+                volatility=volatility,
+                news_impact=news_impact
+            )
+
+            # Update adaptive engine with market data
+            adaptive_engine.update_market_data(market_data)
+
+            # Process signals through adaptive engine
+            signal_components = signal_info.get('components', {})
+
+            # Convert string components to numeric values
+            rsi_condition = signal_components.get('rsi_condition', 'neutral')
+            rsi_numeric = 1 if rsi_condition == 'oversold' else (-1 if rsi_condition == 'overbought' else 0)
+
+            trend_strength = signal_components.get('trend_strength', 'neutral')
+            trend_numeric = 1 if trend_strength == 'bullish' else (-1 if trend_strength == 'bearish' else 0)
+
+            signals_dict = {
+                'technical': abs(float(signal_components.get('ema_signal', 0))) * 80,  # Normalize to 0 or 80
+                'pattern': float(pattern_strength if pattern_signal else 0),
+                'momentum': abs(float(rsi_numeric)) * 80,  # Normalize to 0 or 80
+                'trend': abs(float(trend_numeric)) * 80  # Normalize to 0 or 80
+            }
+
+            # Check if adaptive engine allows trading
+            adaptive_trading_allowed = adaptive_engine.process_signals(signals_dict)
+
+            if not adaptive_trading_allowed and signal in ["BUY", "SELL"]:
+                logger.info(f"Adaptive Engine: Trading not allowed based on confidence voting. Signals: {signals_dict}")
+                signal = "HOLD"
+
+            # Get adaptive adjustments
+            adaptive_adjustments = adaptive_engine.analyze_and_adapt(market_data)
+
+            # Apply adaptive adjustments
+            if adaptive_adjustments.get('signal_override'):
+                signal = adaptive_adjustments['signal_override']
+                strength = adaptive_adjustments.get('adjusted_strength', strength)
+                logger.info(f"Adaptive Engine: Signal overridden to {signal} (strength: {strength:.1f}%)")
+
+            # Adjust risk parameters based on adaptive engine
+            risk_multiplier = adaptive_adjustments.get('risk_multiplier', 1.0)
+            if risk_multiplier != 1.0:
+                logger.info(f"Adaptive Engine: Risk multiplier applied: {risk_multiplier:.2f}")
+
+            # Store original strategy signal for logging consistency
+            original_signal = signal
+            original_strength = strength
+
+            # Signal Confirmation and Minimum Hold Logic - Only apply when positions are open
+            open_positions = executor.get_open_positions(SYMBOL)
+            has_open_positions = len(open_positions) > 0
+
             current_time = time.time()
-            if last_signal is not None and signal != last_signal and signal in ["BUY", "SELL"]:
+            if has_open_positions and last_signal is not None and signal != last_signal and signal in ["BUY", "SELL"]:
                 # Check if signal opposes last signal and strength is below confirmation threshold
                 if (last_signal == "BUY" and signal == "SELL") or (last_signal == "SELL" and signal == "BUY"):
                     if strength < 80:
-                        logger.info(f"⚠️ Signal reversal ignored: {last_signal} → {signal} (strength {strength:.1f}% < 80%)")
-                        signal = last_signal  # Keep previous signal
+                        logger.info(f"Signal reversal ignored (open positions): {last_signal} → {signal} (strength {strength:.1f}% < 80%)")
+                        signal = last_signal  # Keep previous signal for position management
                     elif last_signal_time is not None and (current_time - last_signal_time) < (min_hold_candles * 300):  # 5 candles * 5 min each
-                        logger.info(f"⚠️ Minimum hold time not met: {last_signal} → {signal} (hold time: {(current_time - last_signal_time)/60:.1f} min < {min_hold_candles*5} min)")
-                        signal = last_signal  # Keep previous signal
+                        logger.info(f"Minimum hold time not met (open positions): {last_signal} → {signal} (hold time: {(current_time - last_signal_time)/60:.1f} min < {min_hold_candles*5} min)")
+                        signal = last_signal  # Keep previous signal for position management
 
-            logger.info(f"📈 Signal: {signal} | Strength={strength:.1f}% | ATR={last_atr:.2f}")
+            logger.info(f"Signal: {original_signal} | Strength={original_strength:.1f}% | ATR={last_atr:.2f} | Strategy: {selection_result['selected_strategy']}")
+            if signal != original_signal:
+                logger.info(f"Signal adjusted for position management: {original_signal} → {signal}")
 
             # News Adjustment
-            news_data = get_latest_forex_news()
             if news_data['available']:
                 sentiment = news_data['sentiment']
                 score = news_data['avg_sentiment_score']
-                logger.info(f"📰 News: {sentiment} ({score:.2f})")
+                logger.info(f"News: {sentiment} ({score:.2f})")
 
                 if (sentiment == "bullish" and signal == "SELL") or (sentiment == "bearish" and signal == "BUY"):
                     if score > 0.5:
-                        logger.info("📊 News bias triggered → Overriding signal to HOLD")
+                        logger.info("News bias triggered → Overriding signal to HOLD")
                         signal = "HOLD"
 
             # Manage Open Positions
@@ -422,88 +659,108 @@ def trading_bot():
 
                 last_scaling_check = time.time()
 
-            # Trade Entry
-            open_positions = executor.get_open_positions(SYMBOL)
-            open_count = len(open_positions)
+            # Check bot restart cooldown before trade entry
+            current_time = time.time()
+            time_since_restart = current_time - bot_start_time
+            if time_since_restart < cooldown_seconds:
+                remaining_cooldown = cooldown_seconds - time_since_restart
+                logger.info(f"Bot restart cooldown active: {remaining_cooldown:.0f}s remaining. Skipping trade entry.")
+            else:
+                # Trade Entry - Aggressive Scalping Mode: Allow up to 20 concurrent positions
+                open_positions = executor.get_open_positions(SYMBOL)
+                open_count = len(open_positions)
 
-            if signal in ["BUY", "SELL"] and strength >= 65 and open_count < MAX_CONCURRENT_POSITIONS:
-                if signal != last_signal or open_count == 0:
-                    entry_price = df["close"].iloc[-1]
-                    trend_strength = signal_info["components"]["ema_signal"]
-                    rsi_condition = signal_info["components"]["rsi_condition"]
+                if signal in ["BUY", "SELL"] and strength >= 65:
+                    # ✅ AGGRESSIVE MODE: Allow stacking trades in same direction for scalping
+                    # Dynamic scaling now handled by should_open_new_position() method
+                    # Only require signal strength >= 65, position limits handled dynamically
 
-                    dynamic_sl_multiplier = dynamic_stop_loss(
-                        signal_strength=strength, atr_value=last_atr,
-                        news_sentiment=news_data["sentiment"], trend_strength=trend_strength,
-                        rsi_condition=rsi_condition, position_type=signal
-                    )
+                    # Optional: Prevent stacking too quickly (only add if price moved 0.2 ATR in favor)
+                    allow_stacking = True
+                    if open_count > 0:
+                        # Check if price has moved sufficiently since last entry
+                        last_entry_price = max([pos.price_open for pos in open_positions]) if signal == "BUY" else min([pos.price_open for pos in open_positions])
+                        price_distance = abs(current_price - last_entry_price)
+                        if price_distance < (last_atr * 0.2):
+                            logger.info(f"⏸️ Waiting for price expansion before stacking new {signal} trade (distance: {price_distance:.2f} < {last_atr * 0.2:.2f})")
+                            allow_stacking = False
 
-                    sl_distance = risk_mgr.calculate_dynamic_sl_distance(entry_price, last_atr, dynamic_sl_multiplier)
-                    dynamic_rr = dynamic_rr_ratio(
-                        signal_strength=strength, atr_value=last_atr, news_sentiment=news_data["sentiment"],
-                        trend_strength=trend_strength, rsi_condition=rsi_condition, position_type=signal
-                    )
+                    if allow_stacking:
+                        entry_price = df["close"].iloc[-1]
+                        # Get trend strength and RSI condition with fallbacks
+                        trend_strength = signal_info.get("components", {}).get("ema_signal", 0)
+                        rsi_condition = signal_info.get("components", {}).get("rsi_condition", "neutral")
 
-                    dynamic_lot = risk_mgr.calculate_dynamic_lot_size(
-                        stop_loss_distance=sl_distance, signal_strength=strength, atr_value=last_atr,
-                        session=risk_mgr.get_current_market_session(), recent_perf=risk_mgr.get_recent_performance(),
-                        news_impact=risk_mgr.get_news_impact_level(news_data["sentiment"]),
-                        trade_type="trend" if trend_strength > 0 else "reversal"
-                    )
+                        # Ensure trend_strength is numeric for calculations
+                        if isinstance(trend_strength, str):
+                            trend_strength = 1 if trend_strength == "BUY" else -1 if trend_strength == "SELL" else 0
+                        elif not isinstance(trend_strength, (int, float)):
+                            trend_strength = 0
 
-                    stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
-                    tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
+                        dynamic_sl_multiplier = dynamic_stop_loss(
+                            signal_strength=strength, atr_value=last_atr,
+                            news_sentiment=news_data["sentiment"], trend_strength=trend_strength,
+                            rsi_condition=rsi_condition, position_type=signal
+                        )
 
-                    logger.info(f"📊 Executing {signal}: SL={stop_price:.2f}, TP={tp_price:.2f}, Vol={dynamic_lot:.2f}")
-                    try:
-                        res = executor.enter_trade(SYMBOL, signal, entry_price, stop_price, tp_price, volume=dynamic_lot)
-                        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                            logger.info(f"✅ Trade success [{signal}] | RR={dynamic_rr:.2f} | Lot={dynamic_lot}")
-                            last_signal = signal
-                            last_signal_time = current_time
-                        else:
-                            logger.warning(f"❌ Trade failed → {res.comment if res else 'No result'}")
-                    except Exception as ex:
-                        logger.error(f"❌ Execution error: {ex}")
+                        sl_distance = risk_mgr.calculate_dynamic_sl_distance(entry_price, last_atr, dynamic_sl_multiplier)
+                        dynamic_rr = dynamic_rr_ratio(
+                            signal_strength=strength, atr_value=last_atr, news_sentiment=news_data["sentiment"],
+                            trend_strength=trend_strength, rsi_condition=rsi_condition, position_type=signal
+                        )
 
-            # Knowledge Base Integration - Query for relevant strategy guidance
-            current_rsi = df['RSI_14'].iloc[-1] if 'RSI_14' in df.columns else 50
-            market_snapshot_text = f"symbol: {SYMBOL}, timeframe: {TIMEFRAME}, ema_fast: {EMA_FAST}, ema_slow: {EMA_SLOW}, rsi: {current_rsi:.2f}, atr: {last_atr:.2f}, signal: {signal}, strength: {strength:.1f}%"
-            kb_results = retrieve_relevant_docs(market_snapshot_text, top_k=5)
+                        # Get dynamic risk mode from adaptive engine
+                        risk_mode = adaptive_engine.risk_resolver.resolve_risk_mode(market_data, mt5.account_info().balance)
 
-            # Strategy voting based on KB results
-            strategy_votes = {}
-            for doc in kb_results:
-                doc_text = doc['document'].lower()
-                if "scalp" in doc_text or "scalping" in doc_text:
-                    strategy_votes["scalp"] = strategy_votes.get("scalp", 0) + 1
-                if "swing" in doc_text:
-                    strategy_votes["swing"] = strategy_votes.get("swing", 0) + 1
-                if "breakout" in doc_text or "retest" in doc_text:
-                    strategy_votes["breakout"] = strategy_votes.get("breakout", 0) + 1
-                if "trend" in doc_text or "ema" in doc_text:
-                    strategy_votes["trend"] = strategy_votes.get("trend", 0) + 1
+                        dynamic_lot = risk_mgr.calculate_dynamic_lot_size(
+                            stop_loss_distance=sl_distance, signal_strength=strength, atr_value=last_atr,
+                            session=risk_mgr.get_current_market_session(), recent_perf=risk_mgr.get_recent_performance(),
+                            news_impact=risk_mgr.get_news_impact_level(news_data["sentiment"]),
+                            trade_type="trend" if trend_strength > 0 else "reversal",
+                            risk_mode=risk_mode.value
+                        )
 
-            # Choose strategy based on KB votes, fallback to basic
-            chosen_strategy = max(strategy_votes.items(), key=lambda x: x[1])[0] if strategy_votes else "basic"
-            logger.info(f"🧠 KB strategy votes: {strategy_votes} → chosen: {chosen_strategy}")
+                        # Apply adaptive risk multiplier
+                        dynamic_lot *= risk_multiplier
 
-            # Adjust signal strength based on KB confidence
-            kb_confidence = len(kb_results) / 5.0  # Normalize to 0-1
-            adjusted_strength = min(100, strength + (kb_confidence * 20))  # Boost up to 20% based on KB support
+                        stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
+                        tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
 
-            if chosen_strategy != "basic":
-                logger.info(f"📚 KB guidance applied: {chosen_strategy} strategy recommended")
-                # Could implement strategy-specific logic here
-                # For now, just log and continue with basic strategy but adjusted strength
+                        logger.info(f"🔥 AGGRESSIVE SCALPING: Executing {signal} trade #{open_count + 1}/20 | SL={stop_price:.2f}, TP={tp_price:.2f}, Vol={dynamic_lot:.2f}")
+                        try:
+                            res = executor.enter_trade(SYMBOL, signal, entry_price, stop_price, tp_price, volume=dynamic_lot)
+                            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                                logger.info(f"✅ Trade success [{signal}] | RR={dynamic_rr:.2f} | Lot={dynamic_lot} | Total positions: {open_count + 1}")
+                                last_signal = signal
+                                last_signal_time = current_time
+                            else:
+                                logger.warning(f"❌ Trade failed → {res.comment if res else 'No result'}")
+                        except Exception as ex:
+                            logger.error(f"❌ Execution error: {ex}")
+                    else:
+                        logger.info(f"⏸️ Skipping {signal} trade stacking - waiting for better entry conditions")
+
+
+
+            # Periodic trade synchronization
+            current_time = time.time()
+            if (current_time - last_sync_time) >= sync_interval:
+                logger.info("Running periodic trade synchronization...")
+                try:
+                    trade_sync.full_sync(days_back=7)  # Sync last 7 days
+                    # Also sync closed trades from MT5 deal history
+                    sync_closed_trades(sqlite_conn, lookback_minutes=120)
+                    last_sync_time = current_time
+                except Exception as e:
+                    logger.error(f"❌ Trade sync failed: {e}")
 
             # Adaptive Sleep
             sleep_time = adaptive_wait(last_atr, TIMEFRAME)
-            logger.info(f"⏸️ Sleeping {sleep_time}s (adaptive based on volatility)")
+            logger.info(f"Sleeping {sleep_time}s (adaptive based on volatility)")
             time.sleep(sleep_time)
 
         except KeyboardInterrupt:
-            logger.info("🛑 Bot stopped manually.")
+            logger.info("Bot stopped manually.")
             break
         except Exception as e:
             logger.exception(f"❌ Main loop error: {e}")
@@ -545,13 +802,13 @@ def manage_positions(executor, symbol, atr_value, signal_strength, trend_directi
                 }
                 result = mt5.order_send(req)
                 if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    logger.info(f"🔁 Trailing Stop updated for position {pos.ticket} → SL={new_sl:.2f}")
+                    logger.info(f"Trailing Stop updated for position {pos.ticket} → SL={new_sl:.2f}")
                 else:
-                    logger.warning(f"⚠️ Failed to update SL (retcode={result.retcode})")
+                    logger.warning(f"Failed to update SL (retcode={result.retcode})")
 
         # Scaling
         open_positions = len(mt5.positions_get(symbol=symbol))
-        if SCALING_ENABLED and open_positions < MAX_CONCURRENT_POSITIONS:
+        if SCALING_ENABLED:
             if signal_strength > 85 and trend_direction == pos.type:
                 scaled_volume = round(pos.volume * 1.25, 2)
                 sl = (
@@ -561,7 +818,7 @@ def manage_positions(executor, symbol, atr_value, signal_strength, trend_directi
                     current_price + atr_value * 4 if pos.type == mt5.POSITION_TYPE_BUY else current_price - atr_value * 4
                 )
 
-                logger.info(f"⚙️ Scaling in → vol={scaled_volume} | SL={sl:.2f} | TP={tp:.2f}")
+                logger.info(f"Scaling in → vol={scaled_volume} | SL={sl:.2f} | TP={tp:.2f}")
                 try:
                     executor.place_order(symbol, "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
                                          volume=scaled_volume, sl=sl, tp=tp)

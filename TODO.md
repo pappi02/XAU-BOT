@@ -1,10 +1,12 @@
-# TODO: Fix Margin Check Errors and Implement Smart Risk Management
+# TODO: Implement Dynamic Adaptive Exposure Control
 
 ## Tasks
-- [ ] Create margin_check.py with safe_margin_check and get_safe_lot functions
-- [ ] Create smart_risk.py with calculate_adaptive_lot and related functions
-- [ ] Modify risk/risk_manager.py to use safe_margin_check in check_margin_for_trade
-- [ ] Modify execution/trade_executor.py to import and use smart_risk.calculate_adaptive_lot for lot sizing
-- [ ] Update imports and ensure compatibility
-- [ ] Test the bot execution to ensure margin errors are resolved
-- [ ] Verify lot sizing adapts correctly to market conditions
+- [ ] Update config.py with exposure management constants
+- [ ] Add performance tracker to TradeExecutor class
+- [ ] Modify evaluate_position_scaling method with dynamic exposure logic
+- [ ] Test the changes by running the bot
+
+## Details
+- Fix AttributeError: module 'config' has no attribute 'MAX_TOTAL_EXPOSURE_MULTIPLIER'
+- Implement volatility-aware, drawdown-sensitive, and performance-based exposure adjustment
+- Ensure dynamic multiplier clamps within safe limits

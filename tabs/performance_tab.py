@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import altair as alt
 
 def render_tab(tab, trade_logger):
     with tab:
@@ -91,34 +93,83 @@ def render_tab(tab, trade_logger):
             </div>
             """, unsafe_allow_html=True)
 
+        # Additional Key Metrics
+        col5, col6, col7, col8 = st.columns(4)
+
+        with col5:
+            profit_factor = stats.get("profit_factor", 0)
+            pf_color = "positive" if profit_factor > 1 else "negative" if profit_factor < 1 else "neutral"
+            pf_display = f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞"
+            st.markdown(f"""
+            <div class="perf-card">
+                <div class="perf-label">📊 Profit Factor</div>
+                <div class="perf-value {pf_color}">{pf_display}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col6:
+            avg_win = stats.get("avg_win", 0)
+            st.markdown(f"""
+            <div class="perf-card">
+                <div class="perf-label">💰 Avg Win</div>
+                <div class="perf-value positive">${avg_win:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col7:
+            avg_loss = stats.get("avg_loss", 0)
+            st.markdown(f"""
+            <div class="perf-card">
+                <div class="perf-label">💸 Avg Loss</div>
+                <div class="perf-value negative">${avg_loss:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col8:
+            total_win_pnl = stats.get("total_win_pnl", 0)
+            st.markdown(f"""
+            <div class="perf-card">
+                <div class="perf-label">📈 Total Win P&L</div>
+                <div class="perf-value positive">${total_win_pnl:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
         # Detailed Performance Summary
         with st.expander("📊 Detailed Performance Summary", expanded=True):
             if stats and stats.get("total_trades", 0) > 0:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.markdown("#### 📈 Trade Statistics")
-                    st.metric("Total Trades", stats["total_trades"])
-                    st.metric("Win Rate", f"{stats['win_rate']:.1f}%")
-                    st.metric("Average Profit", f"${stats['avg_profit']:.2f}")
-                    st.metric("Total P&L", f"${stats['total_pnl']:.2f}")
+                    st.markdown("#### 🏆 Best Trade Details")
+                    best_trade_details = trade_logger.get_best_trade_details()
+                    if best_trade_details:
+                        st.metric("Trade ID", best_trade_details["id"])
+                        st.metric("Symbol", best_trade_details["symbol"])
+                        st.metric("Side", best_trade_details["side"])
+                        st.metric("Entry Price", f"${best_trade_details['entry_price']:.5f}")
+                        st.metric("Exit Price", f"${best_trade_details['exit_price']:.5f}" if best_trade_details['exit_price'] else "N/A")
+                        pnl_color = "normal" if best_trade_details["pnl"] > 0 else "inverse"
+                        st.metric("P&L", f"${best_trade_details['pnl']:.2f}", delta_color=pnl_color)
+                        st.metric("Volume", f"{best_trade_details['volume']:.2f}")
+                        st.metric("Timestamp", best_trade_details["timestamp"][:19])  # Format timestamp
+                    else:
+                        st.info("No best trade data available.")
 
                 with col2:
-                    st.markdown("#### 🏅 Best/Worst Performance")
-                    best_trade = stats.get("best_trade", 0)
-                    worst_trade = stats.get("worst_trade", 0)
-
-                    best_color = "normal" if best_trade > 0 else "off"
-                    worst_color = "inverse" if worst_trade < 0 else "off"
-
-                    st.metric("Best Trade", f"${best_trade:.2f}", delta=None, delta_color=best_color)
-                    st.metric("Worst Trade", f"${worst_trade:.2f}", delta=None, delta_color=worst_color)
-
-                    # Additional metrics
-                    profitable_trades = int(stats["total_trades"] * stats["win_rate"] / 100)
-                    losing_trades = stats["total_trades"] - profitable_trades
-                    st.metric("Profitable Trades", profitable_trades)
-                    st.metric("Losing Trades", losing_trades)
+                    st.markdown("#### 💸 Worst Trade Details")
+                    worst_trade_details = trade_logger.get_worst_trade_details()
+                    if worst_trade_details:
+                        st.metric("Trade ID", worst_trade_details["id"])
+                        st.metric("Symbol", worst_trade_details["symbol"])
+                        st.metric("Side", worst_trade_details["side"])
+                        st.metric("Entry Price", f"${worst_trade_details['entry_price']:.5f}")
+                        st.metric("Exit Price", f"${worst_trade_details['exit_price']:.5f}" if worst_trade_details['exit_price'] else "N/A")
+                        pnl_color = "normal" if worst_trade_details["pnl"] > 0 else "inverse"
+                        st.metric("P&L", f"${worst_trade_details['pnl']:.2f}", delta_color=pnl_color)
+                        st.metric("Volume", f"{worst_trade_details['volume']:.2f}")
+                        st.metric("Timestamp", worst_trade_details["timestamp"][:19])  # Format timestamp
+                    else:
+                        st.info("No worst trade data available.")
             else:
                 st.info("No trades recorded yet. Start trading to see performance metrics!")
 
@@ -131,17 +182,36 @@ def render_tab(tab, trade_logger):
             df_daily = df_daily.dropna(subset=['date'])
             df_daily = df_daily.sort_values('date')
 
-            # Filter out infinite and NaN values
-            df_daily = df_daily.replace([float('inf'), float('-inf')], float('nan'))
-            df_daily = df_daily.dropna(subset=['total_pnl'])
+            # Filter out infinite and NaN values comprehensively
+            df_daily = df_daily.replace([np.inf, -np.inf, float('inf'), float('-inf')], np.nan)
+            df_daily = df_daily.dropna(subset=['date', 'total_pnl'])
+
+            # Additional validation: ensure total_pnl is finite and not NaN
+            df_daily = df_daily[np.isfinite(df_daily['total_pnl'])]
 
             if not df_daily.empty:
-                # Enhanced chart with better styling
-                st.line_chart(
-                    df_daily.set_index('date')['total_pnl'],
-                    height=300,
-                    width='stretch'
-                )
+                # Check for valid data before rendering chart
+                if df_daily is not None and not df_daily.empty and pd.notna(df_daily['date']).any() and pd.notna(df_daily['total_pnl']).any():
+                    # Use Altair for better chart control and to avoid Vega-Lite version issues
+                    chart = alt.Chart(df_daily).mark_line(point=True).encode(
+                        x=alt.X('date:T', title='Date'),
+                        y=alt.Y('total_pnl:Q', title='Total P&L'),
+                        tooltip=['date:T', 'total_pnl:Q']
+                    ).properties(
+                        height=300,
+                        title='Daily P&L Trend'
+                    ).configure_axis(
+                        labelColor='white',
+                        titleColor='white'
+                    ).configure_title(
+                        color='white'
+                    ).configure_view(
+                        strokeWidth=0
+                    )
+
+                    st.altair_chart(chart, use_container_width=True)
+                else:
+                    st.warning("No valid data for chart (check trade logs).")
             else:
                 st.info("No valid daily P&L data to display.")
             st.markdown('</div>', unsafe_allow_html=True)

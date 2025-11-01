@@ -5,8 +5,9 @@ from typing import Dict, List, Optional
 
 class TradeLogger:
     """
-    Persistent trade logging using SQLite database.
+    Enhanced persistent trade logging using SQLite database.
     Logs all trades, positions, and P&L for analysis and dashboard.
+    Features comprehensive statistics, ticket tracking, and auto-close logging.
     """
 
     def __init__(self, db_path: str = "trades.db"):
@@ -18,7 +19,7 @@ class TradeLogger:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
-            # Trades table
+            # Trades table with ticket column
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,9 +32,10 @@ class TradeLogger:
                     stop_loss REAL,
                     take_profit REAL,
                     pnl REAL,
-                    status TEXT NOT NULL,  -- OPEN, CLOSED, CANCELLED
+                    status TEXT NOT NULL,  -- OPEN, CLOSED, CANCELLED, AUTO_CLOSED
                     strategy TEXT,
-                    notes TEXT
+                    notes TEXT,
+                    ticket INTEGER
                 )
             ''')
 
@@ -70,7 +72,8 @@ class TradeLogger:
 
     def compute_statistics(self) -> dict:
         """
-        Compute trading statistics: total trades, win rate, avg profit, total pnl, best/worst trade.
+        Compute trading statistics: total trades, win rate, avg profit, total pnl, best/worst trade,
+        profit factor, avg win, avg loss, total win pnl, total loss pnl.
         Returns:
             dict: Statistics summary
         """
@@ -89,19 +92,34 @@ class TradeLogger:
             avg_profit = (total_pnl / total_trades) if total_trades > 0 else 0.0
             best_trade = max(pnls) if pnls else 0.0
             worst_trade = min(pnls) if pnls else 0.0
+
+            # Additional stats
+            win_pnls = [p for p in pnls if p > 0]
+            loss_pnls = [p for p in pnls if p < 0]
+            total_win_pnl = sum(win_pnls) if win_pnls else 0.0
+            total_loss_pnl = sum(loss_pnls) if loss_pnls else 0.0
+            avg_win = (total_win_pnl / len(win_pnls)) if win_pnls else 0.0
+            avg_loss = (total_loss_pnl / len(loss_pnls)) if loss_pnls else 0.0
+            profit_factor = (total_win_pnl / abs(total_loss_pnl)) if total_loss_pnl != 0 else float('inf') if total_win_pnl > 0 else 0.0
+
             return {
                 "total_trades": total_trades,
                 "win_rate": win_rate,
                 "avg_profit": avg_profit,
                 "total_pnl": total_pnl,
                 "best_trade": best_trade,
-                "worst_trade": worst_trade
+                "worst_trade": worst_trade,
+                "profit_factor": profit_factor,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
+                "total_win_pnl": total_win_pnl,
+                "total_loss_pnl": total_loss_pnl
             }
 
     def log_trade_entry(self, symbol: str, side: str, entry_price: float,
                        volume: float, stop_loss: Optional[float] = None,
                        take_profit: Optional[float] = None, strategy: str = "",
-                       notes: str = "") -> int:
+                       notes: str = "", ticket: Optional[int] = None) -> int:
         """
         Log a new trade entry.
 
@@ -114,10 +132,10 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO trades (timestamp, symbol, side, entry_price, volume,
-                                  stop_loss, take_profit, status, strategy, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  stop_loss, take_profit, status, strategy, notes, ticket)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (timestamp, symbol, side, entry_price, volume, stop_loss,
-                  take_profit, "OPEN", strategy, notes))
+                  take_profit, "OPEN", strategy, notes, ticket))
 
             trade_id = cursor.lastrowid
             conn.commit()
@@ -216,18 +234,23 @@ class TradeLogger:
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def get_trade_history(self, limit: int = 100) -> List[Dict]:
+    def get_trade_history(self, limit: Optional[int] = 100) -> List[Dict]:
         """
-        Get recent trade history (including AUTO_CLOSED trades).
+        Get recent trade history (all trades executed).
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM trades
-                WHERE status IN ('CLOSED', 'AUTO_CLOSED')
-                ORDER BY timestamp DESC
-                LIMIT ?
-            ''', (limit,))
+            if limit is None:
+                cursor.execute('''
+                    SELECT * FROM trades
+                    ORDER BY timestamp DESC
+                ''')
+            else:
+                cursor.execute('''
+                    SELECT * FROM trades
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                ''', (limit,))
 
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -303,6 +326,46 @@ class TradeLogger:
             conn.commit()
 
             logging.info(f"Logged auto-close: Ticket {ticket}, {position_type} {symbol}, Reason: {close_reason}, P&L: {pnl}")
+
+    def get_best_trade_details(self) -> Optional[Dict]:
+        """
+        Get details of the best trade (highest pnl) among closed trades.
+        Returns:
+            dict: Trade details or None if no trades
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM trades
+                WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
+                ORDER BY pnl DESC
+                LIMIT 1
+            ''')
+            row = cursor.fetchone()
+            if row:
+                columns = [desc[0] for desc in cursor.description]
+                return dict(zip(columns, row))
+            return None
+
+    def get_worst_trade_details(self) -> Optional[Dict]:
+        """
+        Get details of the worst trade (lowest pnl) among closed trades.
+        Returns:
+            dict: Trade details or None if no trades
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM trades
+                WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
+                ORDER BY pnl ASC
+                LIMIT 1
+            ''')
+            row = cursor.fetchone()
+            if row:
+                columns = [desc[0] for desc in cursor.description]
+                return dict(zip(columns, row))
+            return None
 
 # Global instance
 trade_logger = TradeLogger()

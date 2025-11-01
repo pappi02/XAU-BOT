@@ -70,7 +70,7 @@ def render_tab(tab):
                     else:
                         st.warning("No text extracted from this file.")
 
-            if st.button("🚀 Upload to Knowledge Base", use_container_width=True):
+            if st.button("🚀 Upload to Knowledge Base", width='stretch'):
                 with st.spinner("Uploading and processing files..."):
                     try:
                         files = [("files", (f.name, f.getvalue(), f.type)) for f in uploaded_files]
@@ -92,7 +92,7 @@ def render_tab(tab):
         query = st.text_input("Query the Knowledge Base", placeholder="Enter search terms...")
         top_k = st.slider("Number of results", 1, 20, 5)
 
-        if st.button("🔎 Search", use_container_width=True):
+        if st.button("🔎 Search", width='stretch'):
             if query.strip():
                 with st.spinner("Searching..."):
                     try:
@@ -138,7 +138,7 @@ def render_tab(tab):
         pattern_image = st.file_uploader("Upload chart image", type=["png", "jpg", "jpeg"])
         if pattern_image:
             st.image(pattern_image, caption="Uploaded Chart", use_column_width=True)
-            if st.button("🔍 Detect Patterns", use_container_width=True):
+            if st.button("🔍 Detect Patterns", width='stretch'):
                 with st.spinner("Analyzing image for patterns..."):
                     # TODO: Implement pattern detection
                     st.info("Pattern detection feature coming soon - will integrate ML model for head&shoulders, triangles, etc.")

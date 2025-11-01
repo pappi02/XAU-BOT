@@ -211,7 +211,8 @@ def render_tab(tab, config, mt5, get_open_positions):
                 with col_sum4:
                     st.metric("Sell Positions", sell_positions)
 
-                # Individual position cards
+                # Prepare data for table display
+                position_data = []
                 for pos in positions:
                     is_buy = pos.type == mt5.POSITION_TYPE_BUY
                     symbol_info = mt5.symbol_info(config.SYMBOL)
@@ -222,40 +223,71 @@ def render_tab(tab, config, mt5, get_open_positions):
                     pip_distance = abs(current_price - pos.price_open) * 10000
                     duration_hours = (datetime.utcnow() - datetime.utcfromtimestamp(pos.time)).total_seconds() / 3600
 
-                    # Determine status
-                    status_class = "status-profit" if pos.profit > 0 else "status-loss" if pos.profit < 0 else "status-neutral"
+                    position_data.append({
+                        "Ticket": pos.ticket,
+                        "Symbol": pos.symbol,
+                        "Type": "BUY" if is_buy else "SELL",
+                        "Volume": pos.volume,
+                        "Entry Price": pos.price_open,
+                        "Current Price": current_price,
+                        "P&L": pos.profit,
+                        "Distance (pips)": pip_distance,
+                        "Duration (h)": duration_hours,
+                        "SL": pos.sl if pos.sl > 0 else None,
+                        "TP": pos.tp if pos.tp > 0 else None,
+                        "Swap": pos.swap
+                    })
 
-                    # Position header
-                    st.markdown(f"### {'🟢 BUY' if is_buy else '🔴 SELL'} #{pos.ticket} - {pos.symbol}")
-                    st.markdown(f"**P&L:** ${pos.profit:.2f}")
+                # Create DataFrame
+                df_positions = pd.DataFrame(position_data)
 
-                    # Position details in columns
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Volume", f"{pos.volume} lots")
-                        st.metric("Entry Price", f"${pos.price_open:.5f}")
-                    with col2:
-                        st.metric("Current Price", f"${current_price:.5f}")
-                        st.metric("Distance", f"{pip_distance:.1f} pips")
-                    with col3:
-                        st.metric("Duration", f"{duration_hours:.1f}h")
-                        st.metric("Stop Loss", f"${pos.sl:.5f}" if pos.sl > 0 else "None")
-                    with col4:
-                        st.metric("Take Profit", f"${pos.tp:.5f}" if pos.tp > 0 else "None")
-                        st.metric("Swap", f"${pos.swap:.2f}")
+                # Format columns
+                df_positions["Entry Price"] = df_positions["Entry Price"].map("${:.5f}".format)
+                df_positions["Current Price"] = df_positions["Current Price"].map("${:.5f}".format)
+                df_positions["P&L"] = df_positions["P&L"].map("${:.2f}".format)
+                df_positions["Distance (pips)"] = df_positions["Distance (pips)"].map("{:.1f}".format)
+                df_positions["Duration (h)"] = df_positions["Duration (h)"].map("{:.1f}".format)
+                df_positions["SL"] = df_positions["SL"].map(lambda x: "${:.5f}".format(x) if x else "None")
+                df_positions["TP"] = df_positions["TP"].map(lambda x: "${:.5f}".format(x) if x else "None")
+                df_positions["Swap"] = df_positions["Swap"].map("${:.2f}".format)
 
-                    # Action buttons
-                    col_btn1, col_btn2, col_btn3 = st.columns([1,1,2])
-                    with col_btn1:
-                        if st.button("🔴 Close", key=f"close_{pos.ticket}"):
-                            st.info("Close position functionality not yet implemented")
-                    with col_btn2:
-                        if st.button("⚙️ Modify", key=f"modify_{pos.ticket}"):
-                            st.info("Modify SL/TP functionality not yet implemented")
-                    with col_btn3:
-                        st.empty()
+                # Display table with conditional formatting
+                st.markdown("#### 📋 Open Positions Table")
+                st.dataframe(
+                    df_positions,
+                    width='stretch',
+                    column_config={
+                        "P&L": st.column_config.TextColumn(
+                            "P&L",
+                            help="Profit & Loss",
+                            width="medium",
+                        ),
+                        "Type": st.column_config.TextColumn(
+                            "Type",
+                            help="Buy or Sell position",
+                            width="small",
+                        ),
+                        "Volume": st.column_config.NumberColumn(
+                            "Volume",
+                            help="Position size in lots",
+                            format="%.2f",
+                            width="small",
+                        ),
+                    }
+                )
 
-                    st.markdown("---")
+                # Action buttons below the table
+                st.markdown("#### ⚙️ Position Management")
+                selected_ticket = st.selectbox("Select Position to Manage", [pos.ticket for pos in positions], help="Choose a position ticket to close or modify")
+                col_btn1, col_btn2, col_btn3 = st.columns([1,1,2])
+                with col_btn1:
+                    if st.button("🔴 Close Selected", key="close_selected"):
+                        st.info("Close position functionality not yet implemented")
+                with col_btn2:
+                    if st.button("⚙️ Modify Selected", key="modify_selected"):
+                        st.info("Modify SL/TP functionality not yet implemented")
+                with col_btn3:
+                    st.empty()
             else:
                 st.info("📭 No open positions")
 

@@ -38,15 +38,4 @@ def safe_margin_check(symbol, lot):
         return False, None
 
 
-def get_safe_lot(symbol, requested_lot, min_lot=0.01, step=0.01):
-    """Try progressively smaller lots until margin check passes."""
-    lot = requested_lot
-    while lot >= min_lot:
-        ok, margin = safe_margin_check(symbol, lot)
-        if ok:
-            logger.info(f"✅ Margin OK for {lot} lots | Margin: {margin:.2f}")
-            return lot
-        logger.warning(f"⚠️ Insufficient margin for {lot:.2f}, reducing...")
-        lot = round(lot - step, 2)
-    logger.error("❌ Execution error: Insufficient margin even for minimum lot size.")
-    return None
+

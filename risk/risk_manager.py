@@ -1,7 +1,7 @@
 import math
 from datetime import datetime, timedelta, timezone
 from logger_config import setup_logger
-from margin_check import safe_margin_check, get_safe_lot
+from margin_check import safe_margin_check
 logger = setup_logger()
 
 class RiskManager:
@@ -40,12 +40,47 @@ class RiskManager:
         self.daily_pnl = pnl
         return self.daily_pnl
 
-    def check_daily_loss_limit(self):
+    def get_dynamic_daily_loss_limit(self, volatility=None, recent_performance=None):
+        """
+        Calculate dynamic daily loss limit based on market conditions and performance.
+
+        Args:
+            volatility (float, optional): Current market volatility (ATR)
+            recent_performance (dict, optional): Recent trading performance metrics
+
+        Returns:
+            float: Dynamic daily loss percentage
+        """
+        if not self.config.DYNAMIC_DAILY_LOSS_ENABLED:
+            return self.config.MAX_DAILY_LOSS_PCT
+
+        base_limit = self.config.BASE_MAX_DAILY_LOSS_PCT
+
+        # Adjust based on volatility
+        if volatility is not None:
+            if volatility > 2.0:  # High volatility
+                base_limit *= 0.8  # Reduce limit in high volatility
+            elif volatility < 1.0:  # Low volatility
+                base_limit *= 1.2  # Increase limit in calm markets
+
+        # Adjust based on recent performance
+        if recent_performance:
+            win_rate = recent_performance.get('win_rate', 50)
+            if win_rate < 40:  # Poor performance
+                base_limit *= 0.7  # More conservative
+            elif win_rate > 70:  # Good performance
+                base_limit *= 1.1  # Slightly more aggressive
+
+        # Ensure reasonable bounds
+        return max(1.0, min(base_limit, 5.0))  # Between 1% and 5%
+
+    def check_daily_loss_limit(self, volatility=None, recent_performance=None):
         account = self.refresh_account()
         balance = float(account.balance)
         profit = float(account.profit)  # floating P&L
-        allowed_loss = balance * self.config.MAX_DAILY_LOSS_PCT
-        logger.debug(f"Floating P&L: {profit:.2f}, allowed loss: {allowed_loss:.2f}")
+        dynamic_loss_pct = self.get_dynamic_daily_loss_limit(volatility, recent_performance)
+        allowed_loss = balance * (dynamic_loss_pct / 100.0)
+        logger.debug(f"Floating P&L: {profit:.2f}, allowed loss: {allowed_loss:.2f} (dynamic limit: {dynamic_loss_pct:.1f}%)")
         return profit > -allowed_loss
 
     def enough_balance(self):
@@ -185,12 +220,7 @@ class RiskManager:
 
         # Base risk amount
         risk_mode = risk_mode or self.config.DEFAULT_RISK_MODE
-        if risk_mode == "aggressive":
-            base_risk_pct = self.config.BASE_RISK_PERCENT * self.config.RISK_MODE_AGGRESSIVE_MULTIPLIER
-        elif risk_mode == "conservative":
-            base_risk_pct = self.config.BASE_RISK_PERCENT * self.config.RISK_MODE_CONSERVATIVE_MULTIPLIER
-        else:  # balanced
-            base_risk_pct = self.config.BASE_RISK_PERCENT
+        base_risk_pct = self.config.BASE_RISK_PERCENT * self.config.RISK_MODE.get(risk_mode, 1.0)
 
         risk_amount = equity * (base_risk_pct / 100)
 
@@ -220,12 +250,10 @@ class RiskManager:
                 lot_size *= self.config.ATR_LOW_MULTIPLIER
 
         # Apply market session multiplier
-        if session == "Asian":
-            lot_size *= self.config.SESSION_ASIAN_MULTIPLIER
-        elif session in ["London"]:
-            lot_size *= self.config.SESSION_LONDON_MULTIPLIER
-        elif session in ["New York"]:
-            lot_size *= self.config.SESSION_NEWYORK_MULTIPLIER
+        session_multipliers = self.config.SESSION_RISK_MULTIPLIERS
+        session_key = session.lower().replace(" ", "")
+        if session_key in session_multipliers:
+            lot_size *= session_multipliers[session_key]
 
         # Apply recent performance multiplier
         if recent_perf == "winning":
