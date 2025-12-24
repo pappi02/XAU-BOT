@@ -1,17 +1,38 @@
-# strategies/__init__.py - Strategy Module Initialization
+# strategies/__init__.py - Professional Scalping Strategies Module
 
+# Import all professional scalping strategies
+from .breakout_scalping import BreakoutScalping
+from .momentum_scalping import MomentumScalping
+from .ma_scalping import MovingAverageScalping
+from .dip_scalping import DipScalping
+from .range_scalping import RangeScalping
+
+# Legacy imports (kept for backward compatibility, but not recommended for new code)
 from .scalping import ScalpingStrategy
 from .regime_detector import RegimeDetector
 from .strategy_selector import StrategySelector
 
 __all__ = [
+    # Professional scalping strategies (recommended)
+    'BreakoutScalping',
+    'MomentumScalping',
+    'MovingAverageScalping',
+    'DipScalping',
+    'RangeScalping',
+    # Legacy strategies
     'ScalpingStrategy',
     'RegimeDetector',
     'StrategySelector'
 ]
 
-# Strategy mapping for easy access - only scalping for short-term focus
+# Professional strategy mapping - 5 expert scalping strategies
 STRATEGY_CLASSES = {
+    'breakout_scalping': BreakoutScalping,
+    'momentum_scalping': MomentumScalping,
+    'ma_scalping': MovingAverageScalping,
+    'dip_scalping': DipScalping,
+    'range_scalping': RangeScalping,
+    # Legacy
     'scalping': ScalpingStrategy
 }
 

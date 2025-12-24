@@ -72,67 +72,103 @@ def add_bollinger_signals(data, period=20, std_dev=2, column='close'):
 
     return df
 
-def get_bollinger_position(data, period=20, std_dev=2, column='close'):
+def get_bollinger_signal(price, upper, middle, lower):
     """
-    Get current position relative to Bollinger Bands.
-
+    Get Bollinger Bands trading signal.
+    
     Args:
-        data (pd.DataFrame): OHLC data
-        period (int): Moving average period
-        std_dev (float): Standard deviation multiplier
-        column (str): Column to calculate bands on
-
+        price (float): Current price
+        upper (float): Upper band value
+        middle (float): Middle band value
+        lower (float): Lower band value
+    
     Returns:
-        str: Position ('above_upper', 'below_lower', 'within_bands')
+        int: 1 (bullish), -1 (bearish), 0 (neutral)
     """
-    upper, middle, lower = calculate_bollinger_bands(data, period, std_dev, column)
-    current_price = data[column].iloc[-1]
-    upper_val = upper.iloc[-1]
-    lower_val = lower.iloc[-1]
-
-    if current_price > upper_val:
-        return 'above_upper'
-    elif current_price < lower_val:
-        return 'below_lower'
+    if price <= lower:
+        return 1  # At/below lower band, potential buy
+    elif price >= upper:
+        return -1  # At/above upper band, potential sell
     else:
-        return 'within_bands'
+        return 0  # Within bands
 
-def bollinger_reversal_signal(data, period=20, std_dev=2, column='close'):
+def is_price_at_upper_band(price, upper, threshold=0.01):
     """
-    Detect potential reversal signals based on Bollinger Bands.
+    Check if price is at upper band.
+    
+    Args:
+        price (float): Current price
+        upper (float): Upper band value
+        threshold (float): Proximity threshold (percentage)
+    
+    Returns:
+        bool: True if at upper band
+    """
+    return price >= upper * (1 - threshold)
+
+def is_price_at_lower_band(price, lower, threshold=0.01):
+    """
+    Check if price is at lower band.
+    
+    Args:
+        price (float): Current price
+        lower (float): Lower band value
+        threshold (float): Proximity threshold (percentage)
+    
+    Returns:
+        bool: True if at lower band
+    """
+    return price <= lower * (1 + threshold)
+
+def get_bollinger_squeeze_signal(data, period=20, std_dev=2, column='close'):
+    """
+    Detect Bollinger Bands squeeze (low volatility period).
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        period (int): Moving average period
+        std_dev (float): Standard deviation multiplier
+        column (str): Column to calculate on
+    
+    Returns:
+        bool: True if squeeze detected
+    """
+    upper, middle, lower = calculate_bollinger_bands(data, period, std_dev, column)
+    
+    # Current bandwidth
+    bandwidth = (upper - lower) / middle
+    
+    # Average bandwidth (using longer period for comparison)
+    avg_bandwidth = bandwidth.rolling(window=period * 2).mean()
+    
+    # Squeeze when bandwidth is in bottom 25% of historical
+    squeeze_threshold = 0.75
+    
+    if len(avg_bandwidth) > 1:
+        return bandwidth.iloc[-1] < avg_bandwidth.iloc[-1] * squeeze_threshold
+    return False
+
+
+def get_bollinger_position(data, period=20, std_dev=2, column='close'):
+    """Return the price position relative to the Bollinger Bands.
 
     Args:
         data (pd.DataFrame): OHLC data
         period (int): Moving average period
         std_dev (float): Standard deviation multiplier
-        column (str): Column to calculate bands on
+        column (str): Price column to evaluate
 
     Returns:
-        str: Signal type ('bullish_reversal', 'bearish_reversal', 'none')
+        str: 'above_upper', 'below_lower', or 'within_bands'
     """
-    if len(data) < period + 1:
-        return 'none'
+    upper, _, lower = calculate_bollinger_bands(data, period=period, std_dev=std_dev, column=column)
+    price = data[column].iloc[-1]
 
-    upper, middle, lower = calculate_bollinger_bands(data, period, std_dev, column)
-
-    # Check if price touched lower band recently and is now moving up
-    recent_low = data[column].tail(period).min()
-    current_price = data[column].iloc[-1]
-    lower_recent = lower.tail(period).min()
-
-    # Bullish reversal: price touched lower band and is now above middle
-    if (recent_low <= lower_recent * 1.001) and (current_price > middle.iloc[-1]):
-        return 'bullish_reversal'
-
-    # Check if price touched upper band recently and is now moving down
-    recent_high = data[column].tail(period).max()
-    upper_recent = upper.tail(period).max()
-
-    # Bearish reversal: price touched upper band and is now below middle
-    if (recent_high >= upper_recent * 0.999) and (current_price < middle.iloc[-1]):
-        return 'bearish_reversal'
-
-    return 'none'
+    if price >= upper.iloc[-1]:
+        return 'above_upper'
+    if price <= lower.iloc[-1]:
+        return 'below_lower'
+    return 'within_bands'
 
 if __name__ == "__main__":
     # Example usage

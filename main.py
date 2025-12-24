@@ -9,6 +9,7 @@ from datetime import datetime
 import MetaTrader5 as mt5
 import subprocess
 from logger_config import setup_logger
+from utils.symbol_helpers import resolve_symbol
 
 # Import project modules
 import config
@@ -26,6 +27,9 @@ from patterns.head_and_shoulders import detect_head_and_shoulders
 
 # Set up logger
 logger = setup_logger(level=LOG_LEVEL)
+
+# Ensure symbol is always in canonical form
+SYMBOL_PHASE5 = resolve_symbol(config.SYMBOL_PHASE5 if hasattr(config, 'SYMBOL_PHASE5') else config.SYMBOL)
 
 # === Settings ===
 MAX_OPEN_TRADES = 12

@@ -1,0 +1,14 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "starting_balance": 1000.0,
+  "final_balance": 1008.9998919999999,
+  "metrics": {
+    "sharpe": 1.0162612288412376,
+    "max_drawdown": -0.003,
+    "cagr": 25.31835309709479,
+    "avg_daily_return": 0.009295081967213124,
+    "volatility_annual": 0.009146351059571144
+  },
+  "trade_count": 3
+}

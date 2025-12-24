@@ -26,6 +26,7 @@ from data.connect_mt5 import connect_mt5, disconnect_mt5
 from data.fetch_candles import get_candles
 from strategies.strategy_basic import BasicTradingStrategy
 from strategies.strategy_selector import StrategySelector
+from signal_generator import UnifiedSignalGenerator
 from utils.indicators import atr, dynamic_rr_ratio, dynamic_stop_loss
 from utils.news_reader_clean import get_latest_forex_news
 from execution.trade_executor import TradeExecutor
@@ -33,6 +34,7 @@ from risk.risk_manager import RiskManager
 from trade_logger import trade_logger
 from trade_sync import trade_sync
 from logger_config import setup_logger
+from utils.symbol_helpers import resolve_symbol
 from patterns.double_top import detect_double_top
 from patterns.double_bottom import detect_double_bottom
 from patterns.head_and_shoulders import detect_head_and_shoulders
@@ -52,13 +54,28 @@ import config_learning as cfg
 # Set up logger
 logger = setup_logger(level=LOG_LEVEL)
 
+# Normalize symbols to canonical form from the start
+_canonical_symbol = resolve_symbol(config.SYMBOL)
+
+# Validate config at startup
+from validate_config import validate_config
+validation = validate_config(config)
+if not validation['valid']:
+    logger.error(f"Configuration validation failed. Aborting startup.")
+    for issue in validation['issues']:
+        logger.error(f"  - {issue}")
+    quit(1)
+
+# Ensure symbol is always in canonical form
+_canonical_symbol = resolve_symbol(config.SYMBOL)
+
 # -----------------------------
 # 🧠 MT5 Login Credentials
 # -----------------------------
 LOGIN = MT5_ACCOUNT
 PASSWORD = MT5_PASSWORD
 SERVER = MT5_SERVER
-SYMBOL = SYMBOL
+SYMBOL = _canonical_symbol  # Always use resolved (canonical) form
 TIMEFRAME = TIMEFRAME
 
 # -----------------------------
@@ -83,6 +100,26 @@ sqlite_conn = tlog.init_db()
 # ⚙️ Flask API for Dashboard
 # -----------------------------
 app = Flask(__name__)
+# Shared state cache for latest signal/risk context exposed to dashboard
+state_cache = {
+    "updated_at": None,
+    "signal": None,
+    "strength": None,
+    "price": None,
+    "atr": None,
+    "regime": None,
+    "trend_strength": None,
+    "volatility": None,
+    "news_sentiment": None,
+    "news_impact": None,
+    "risk_mode": None,
+    "risk_multiplier": None,
+    "dynamic_rr": None,
+    "dynamic_lot": None,
+    "sl_distance": None,
+    "stop_price": None,
+    "tp_price": None
+}
 
 # KB setup
 KB_UPLOAD_DIR = os.getenv("LEARN_UPLOAD_DIR", "./uploads")
@@ -179,7 +216,7 @@ def market_data():
 @app.route('/signals')
 def signals():
     try:
-        SYMBOL_LOCAL = "XAUUSDm"
+        SYMBOL_LOCAL = resolve_symbol("XAUUSDm")  # Normalize to canonical form
         TIMEFRAME = mt5.TIMEFRAME_M5  # unified M5 timeframe for consistency
 
         rates = mt5.copy_rates_from_pos(SYMBOL_LOCAL, TIMEFRAME, 0, 300)
@@ -233,6 +270,69 @@ def signals():
             "lower": float(lower),
             "higher_tf_trend": "N/A",  # Removed higher timeframe for consistency
             "reasons": reasons
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/broker_specs')
+def broker_specs():
+    try:
+        # Ensure symbol is selected
+        mt5.symbol_select(SYMBOL, True)
+        info = mt5.symbol_info(SYMBOL)
+        digits = int(info.digits) if info and hasattr(info, 'digits') else 2
+        point = getattr(info, 'point', 0.01) if info else 0.01
+        # Stops level in points → convert to price units
+        stops_level_points = 0
+        for attr in ('trade_stops_level', 'stops_level'):
+            if info and hasattr(info, attr):
+                stops_level_points = getattr(info, attr) or 0
+                break
+        min_stop_distance = float(stops_level_points) * float(point)
+        return jsonify({
+            "symbol": SYMBOL,
+            "digits": digits,
+            "point": float(point),
+            "min_stop_distance": float(min_stop_distance)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/signal_context')
+def signal_context():
+    try:
+        # Return latest cached signal/risk context
+        payload = dict(state_cache)
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/news_state')
+def news_state():
+    try:
+        return jsonify({
+            "news_sentiment": state_cache.get("news_sentiment"),
+            "news_impact": state_cache.get("news_impact"),
+            "updated_at": state_cache.get("updated_at")
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/economic_events')
+def economic_events():
+    """Return a simple list of upcoming events if available; otherwise a stub."""
+    try:
+        events = []
+        # Optional: integrate with utils.economic_calendar if present
+        try:
+            from utils.economic_calendar import get_events_today_and_tomorrow
+            events = get_events_today_and_tomorrow()
+        except Exception:
+            # Fallback stub using config gating windows
+            events = []
+        return jsonify({
+            "events": events,
+            "gating_enabled": getattr(config, 'NEWS_GATING_ENABLED', False)
         })
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -360,6 +460,21 @@ def trading_bot():
     executor = TradeExecutor(mt5, config, risk_mgr)
     strategy = BasicTradingStrategy(ema_fast=EMA_FAST, ema_slow=EMA_SLOW, rsi_period=RSI_PERIOD,
                                     bb_period=BB_PERIOD, bb_std=BB_STD_DEV)
+
+    # Initialize professional unified signal generator with enhanced signal quality
+    unified_signal_generator = UnifiedSignalGenerator(
+        ema_fast=EMA_FAST,
+        ema_slow=EMA_SLOW,
+        rsi_period=RSI_PERIOD,
+        bb_period=BB_PERIOD,
+        bb_std=BB_STD_DEV,
+        config=config,
+        enable_news_gating=True,
+        enable_strategy_refinements=True,
+        enable_pattern_quality_controls=True,
+        mt5_connection=mt5
+    )
+    logger.info("✅ Initialized UnifiedSignalGenerator with professional enhancements")
 
     # Initialize enhanced strategy selector
     strategy_selector = StrategySelector(cooldown_sec=300, min_confidence=0.6)
@@ -725,6 +840,30 @@ def trading_bot():
 
                         stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
                         tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
+
+                        # Update state cache for dashboard visibility
+                        try:
+                            state_cache.update({
+                                "updated_at": datetime.utcnow().isoformat(),
+                                "signal": signal,
+                                "strength": float(strength),
+                                "price": float(entry_price),
+                                "atr": float(last_atr),
+                                "regime": selection_result.get('regime_info', {}).get('regime', 'unknown'),
+                                "trend_strength": float(trend_strength),
+                                "volatility": float(volatility),
+                                "news_sentiment": news_data.get('sentiment', 'neutral'),
+                                "news_impact": float(news_impact),
+                                "risk_mode": getattr(risk_mode, 'value', str(risk_mode)),
+                                "risk_multiplier": float(risk_multiplier),
+                                "dynamic_rr": float(dynamic_rr),
+                                "dynamic_lot": float(dynamic_lot) if dynamic_lot is not None else None,
+                                "sl_distance": float(sl_distance),
+                                "stop_price": float(stop_price),
+                                "tp_price": float(tp_price)
+                            })
+                        except Exception as _:
+                            pass
 
                         logger.info(f"🔥 AGGRESSIVE SCALPING: Executing {signal} trade #{open_count + 1}/20 | SL={stop_price:.2f}, TP={tp_price:.2f}, Vol={dynamic_lot:.2f}")
                         try:

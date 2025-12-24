@@ -10,7 +10,7 @@ load_dotenv()
 ############################
 # ✅ STATIC SYSTEM SETTINGS
 ############################
-SYMBOL = 'XAUUSDm'
+SYMBOL = 'XAUUSD'
 TIMEFRAME = 'M5'
 MIN_ACCOUNT_BALANCE = 5.0
 LOG_LEVEL = "INFO"
@@ -19,7 +19,7 @@ POSITION_MODE = "hedge"
 # API Keys
 API_KEY = os.getenv('API_KEY', 'your_api_key_here')
 SECRET_KEY = os.getenv('SECRET_KEY', 'your_secret_key_here')
-NEWS_API_KEY = os.getenv('NEWS_API_KEY', '2287da19b4ca4f6a9d2711431ca2278b')  # Get from https://newsapi.org/
+NEWS_API_KEY = os.getenv('NEWS_API_KEY')  # Get from https://newsapi.org/
 
 # MT5 Settings
 MT5_ACCOUNT = os.getenv('MT5_ACCOUNT')
@@ -37,14 +37,18 @@ if MT5_SERVER in [None, '', 'None']:
     MT5_SERVER = None
 
 MT5_TIMEOUT = 60000  # Connection timeout in milliseconds
-MT5_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"  # Path to MT5 terminal
+MT5_PATH = os.getenv('MT5_PATH', r"C:\Program Files\MetaTrader 5\terminal64.exe")  # Path to MT5 terminal
 
 # Data Settings
 DATA_SOURCE = 'mt5'  # 'mt5' for MetaTrader 5, 'api' for other sources, 'file' for local files
-NUM_CANDLES = 1500  # Increased for more data in aggressive M5 scalping
+NUM_CANDLES = 2000  # Increased for scalping with MTF confirmation
+
+# Multi-Timeframe Settings for Scalping
+MTF_ENABLED = True  # Enable multi-timeframe confirmation
+MTF_CONFIRMATION_TFS = ['M15', 'M30', 'H1']  # Higher timeframes for confirmation
 
 # Trading Settings
-TRADE_ACCOUNT_MODE = "live"  # "demo" or "live"
+TRADE_ACCOUNT_MODE = os.getenv('TRADE_ACCOUNT_MODE', 'live')  # "demo" or "live"
 ORDER_RETRY = 3  # Times to retry order_send on failures
 ORDER_DEVIATION = 20  # Allowed slippage in points
 
@@ -54,6 +58,13 @@ ORDER_DEVIATION = 20  # Allowed slippage in points
 MIN_LOT_SIZE = 0.01
 MAX_LOT_SIZE = 0.05
 LOT_STEP = 0.01
+
+# Risk per trade as percentage of account balance (env-backed, default 0.3%)
+RISK_PER_TRADE_PCT = float(os.getenv('RISK_PER_TRADE_PCT', '0.3')) / 100.0  # Converted to decimal
+# Validate range: 0.1% to 5%
+if not (0.001 <= RISK_PER_TRADE_PCT <= 0.05):
+    import warnings
+    warnings.warn(f"RISK_PER_TRADE_PCT {RISK_PER_TRADE_PCT*100:.2f}% outside recommended range [0.1, 5]")
 
 # === Dynamic Risk Control ===
 # Baseline daily loss percentage (used when volatility is low)
@@ -113,35 +124,37 @@ RISK_MODE = {
     "balanced": 1.5,
     "conservative": 0.6
 }
-DEFAULT_RISK_MODE = "aggressive"  # ✅ Set to Aggressive AI Mode
+DEFAULT_RISK_MODE = "balanced"  # ✅ Set to Balanced Mode
 
 ############################
 # ✅ DYNAMIC INDICATOR PARAMETERS
 ############################
 def get_dynamic_ema_periods(trend_strength: float, timeframe_performance: dict) -> tuple:
-    """Dynamic EMA periods based on trend strength and performance"""
+    """Dynamic EMA periods based on trend strength and performance - SCALPING optimized"""
+    # Shorter periods for scalping on M1/M5
     if trend_strength > 70:
-        fast, slow = 12, 26  # longer in strong trends
+        fast, slow = 8, 21  # faster response in strong trends
     elif trend_strength < 40:
-        fast, slow = 8, 18   # shorter in choppy markets
+        fast, slow = 5, 13   # very fast in choppy markets
     else:
-        fast, slow = 10, 21  # balanced
+        fast, slow = 8, 21  # scalping default
 
     # Adjust based on timeframe performance (lag detection)
     if timeframe_performance.get('ema_lag', 0) > 5:
-        fast = max(5, fast - 2)
-        slow = max(10, slow - 4)
+        fast = max(3, fast - 2)
+        slow = max(8, slow - 4)
 
     return fast, slow
 
 def get_dynamic_rsi_period(market_regime: str, volatility: float) -> int:
-    """Dynamic RSI period based on market regime"""
+    """Dynamic RSI period based on market regime - SCALPING optimized"""
+    # Faster RSI for scalping
     if market_regime == 'trending':
-        return 21  # longer for trending markets
+        return 14  # moderate for trending markets
     elif market_regime == 'choppy':
-        return 9   # shorter for range markets
+        return 7   # very fast for range markets
     else:
-        return 14  # default
+        return 9  # scalping default (faster than standard 14)
 
 def get_dynamic_bb_period(volatility: float, trend_strength: float) -> tuple:
     """Dynamic Bollinger Bands parameters"""
@@ -163,13 +176,102 @@ def get_dynamic_atr_period(volatility: float) -> int:
     else:
         return 14  # default
 
-# Legacy constants for backward compatibility (will be replaced by functions)
-EMA_FAST = 12
-EMA_SLOW = 26
-RSI_PERIOD = 14
-BB_PERIOD = 20
+# SCALPING optimized constants (shorter periods for M1/M5)
+EMA_FAST = 8
+EMA_SLOW = 21
+RSI_PERIOD = 7  # ✅ Changed from 9 to 7 for FASTER reversals (scalping)
+BB_PERIOD = 15  # Shorter BB for scalping
 BB_STD_DEV = 2
-ATR_PERIOD = 14
+ATR_PERIOD = 10  # Faster ATR response for scalping
+
+# ✅ NEW: PROFESSIONAL SCALPING INDICATOR PARAMETERS
+# MACD - Fast periods for scalping
+MACD_FAST = 8        # Faster than standard 12
+MACD_SLOW = 17       # Slower than standard 26
+MACD_SIGNAL = 9      # Signal line period (quicker reversal detection)
+
+# VWAP - Intraday trading
+VWAP_ENABLED = True
+VWAP_SESSION_RESET = False  # Don't reset on daily open, use full intraday history
+
+# Supertrend - Trend confirmation with ATR-based stops
+SUPERTREND_PERIOD = 10
+SUPERTREND_MULTIPLIER = 3.0
+SUPERTREND_ENABLED = True
+
+# Volume Analysis
+VOLUME_SPIKE_THRESHOLD = 1.5     # 1.5x average volume = spike
+VOLUME_SPIKE_PERIOD = 20         # Average volume over last 20 candles
+VOLUME_ANALYSIS_ENABLED = True
+
+# EMA Stack for scalping (8/13/21 Fibonacci-based)
+EMA_STACK_PERIODS = [8, 13, 21]
+EMA_STACK_ENABLED = True
+
+# ✅ PROFESSIONAL 8-INDICATOR SCALPING SUITE PARAMETERS
+# ==============================================================
+
+# 1. RSI (Already defined above as RSI_PERIOD = 7)
+RSI_OVERSOLD_LEVEL = 30       # Buy signal threshold
+RSI_OVERBOUGHT_LEVEL = 70     # Sell signal threshold
+RSI_EXTREME_OVERSOLD = 20     # Very strong buy signal
+RSI_EXTREME_OVERBOUGHT = 80   # Very strong sell signal
+
+# 2. Bollinger Bands (Enhanced for scalping)
+BB_MIDDLE_LINE_ENABLED = True  # Use middle line for confirmation
+BB_SCALPING_SQUEEZE = 1.5      # Bollinger squeeze sensitivity (lower = tighter)
+
+# 3. Stochastic Oscillator (Enhanced for scalping - 20/80 levels per guide)
+STOCHASTIC_ENABLED = True
+STOCHASTIC_PERIOD = 14         # Default 14
+STOCHASTIC_K_SMOOTH = 3        # Smoothing of %K
+STOCHASTIC_D_SMOOTH = 3        # Smoothing of %D
+STOCHASTIC_OVERSOLD = 20       # Professional scalping level (not 30)
+STOCHASTIC_OVERBOUGHT = 80     # Professional scalping level (not 70)
+
+# 4. Parabolic SAR (3-dot strategy per trading guide)
+PARABOLIC_SAR_ENABLED = True
+PARABOLIC_SAR_INITIAL_AF = 0.02    # Initial acceleration factor
+PARABOLIC_SAR_MAX_AF = 0.2        # Maximum acceleration factor
+PARABOLIC_SAR_AF_INCREMENT = 0.02 # AF increment per new extreme
+PARABOLIC_SAR_MIN_DOTS = 3        # Require 3+ dots for reliable entry (per guide)
+
+# 5. Commodity Channel Index - CCI (Extreme level detection ±200)
+CCI_ENABLED = True
+CCI_PERIOD = 20                    # Standard CCI period
+CCI_OVERSOLD = -100               # Reversal entry threshold
+CCI_OVERBOUGHT = 100              # Reversal exit threshold
+CCI_EXTREME_OVERSOLD = -200       # Very high reversal probability
+CCI_EXTREME_OVERBOUGHT = 200      # Very high reversal probability
+
+# 6. MACD (Already optimized - 8/17/9)
+# MACD_FAST = 8, MACD_SLOW = 17, MACD_SIGNAL = 9 (defined above)
+MACD_HISTOGRAM_ENABLED = True     # Use histogram for divergence detection
+MACD_DIVERGENCE_LOOKBACK = 5      # Lookback period for divergence detection
+
+# 7. Ichimoku Cloud (Cloud breakout strategy)
+ICHIMOKU_ENABLED = True
+ICHIMOKU_TENKAN = 9              # Conversion line (fast)
+ICHIMOKU_KIJUN = 26              # Base line (medium)
+ICHIMOKU_SENKOU_B = 52           # Slow cloud line
+ICHIMOKU_CHIKOU = 26             # Lagging span
+ICHIMOKU_CLOUD_LOOKAHEAD = 26    # Plot cloud ahead
+ICHIMOKU_BREAKOUT_ENABLED = True # Enter on cloud breakout
+
+# 8. TRIX (Triple Exponential Average - momentum)
+TRIX_ENABLED = True
+TRIX_PERIOD = 15                  # Faster for scalping (standard is 15)
+TRIX_ZERO_CROSS_ENABLED = True   # Trade zero-line crosses
+TRIX_EXTREME_LEVEL = 1.0         # Extreme momentum threshold (±1.0)
+TRIX_DIVERGENCE_ENABLED = True   # Detect divergence
+
+############################
+# ✅ PROFESSIONAL SETUP WEIGHTS
+############################
+# These weights are used in the master analyzer (scalping_setups_professional_8_indicators.py)
+OSCILLATOR_REVERSAL_WEIGHT = 0.30        # Oscillator setup (RSI+CCI+Stochastic+BB)
+CLOUD_BREAKOUT_WEIGHT = 0.35            # Cloud setup (Ichimoku+TRIX+MACD)
+SAR_TREND_FOLLOWING_WEIGHT = 0.35       # SAR setup (Parabolic SAR+MACD+BB)
 
 ############################
 # ✅ ADAPTIVE LOGIC SWITCHES
@@ -187,8 +289,33 @@ ADAPTIVE_BREAK_EVEN = True
 CONFIRMATION_CANDLE_WINDOW = 3      # Number of consecutive candles required for confirmation
 SIGNAL_PERSISTENCE_THRESHOLD = 0.9  # 90% of signal strength must persist
 SCALING_DELAY_SECONDS = 120         # Wait 2 minutes before adding next scale position
-DYNAMIC_SCALING_EXPAND_LIMIT = 4    # Dynamic cap when signals persist strongly
-MAX_CONCURRENT_POSITIONS = 10       # Base max concurrent positions (dynamic scaling can expand beyond)
+DYNAMIC_SCALING_EXPAND_LIMIT = 3    # Max additional positions per signal cluster (≤ MAX_CONCURRENT_POSITIONS)
+MAX_CONCURRENT_POSITIONS = 20       # Base max concurrent positions (maximum 20 open trades allowed)
+
+# Scaling gates: require minimum profit/margin before allowing more positions
+SCALING_MIN_PROFIT_TO_ADD_POS = 50  # Require $50 floating profit before adding next position
+SCALING_MIN_FREE_MARGIN_RATIO = 0.3 # Require 30% free margin before adding position
+SCALING_PROFIT_MULTIPLIER = 1.5     # Each new scale position is 1.5x smaller than previous
+
+############################
+# ✅ NEWS & ECONOMIC CALENDAR GATING
+############################
+# Enable/disable economic calendar-based trading gating
+NEWS_GATING_ENABLED = True
+
+# High-impact event windows (e.g., FOMC, NFP, ECB decisions)
+# Trading is completely blocked during these windows
+HIGH_IMPACT_GATE_BEFORE_MIN = 15   # Minutes before event to start gating
+HIGH_IMPACT_GATE_AFTER_MIN = 30    # Minutes after event to continue gating
+
+# Medium-impact event windows (e.g., ISM, retail sales, inflation data)
+# Signal confidence is degraded but trading is not blocked
+MEDIUM_IMPACT_DEGRADE_BEFORE_MIN = 30  # Minutes before event to start degrading
+MEDIUM_IMPACT_DEGRADE_AFTER_MIN = 45   # Minutes after event to continue degrading
+
+# Optional: Economic calendar API key for real-time event data
+# If not provided, falls back to manually maintained economic events list
+ECONOMIC_CALENDAR_API_KEY = os.getenv('ECONOMIC_CALENDAR_API_KEY')
 
 ############################
 # ✅ TRADING FEATURES
@@ -212,54 +339,54 @@ SMART_TRAILING_HOLD_ZONE = 0.3           # If retracement <30% of move, don't ti
 # ✅ DYNAMIC SL / TP & R:R TUNING
 ############################
 def get_dynamic_tp_rr_min_max(volatility: float, session: str, win_rate_24h: float) -> tuple:
-    """Dynamic TP RR min/max based on volatility, session, and win rate"""
-    base_min, base_max = 1.8, 4.0
+    """Dynamic TP RR min/max based on volatility, session, and win rate - SCALPING optimized"""
+    base_min, base_max = 1.2, 2.5  # Tighter for scalping (was 1.8, 4.0)
 
     # Adjust for volatility
     if volatility > 2.0:
-        base_min *= 1.2  # wider in high vol
-        base_max *= 1.3
+        base_min *= 1.15  # slightly wider in high vol
+        base_max *= 1.2
     elif volatility < 1.0:
         base_min *= 0.9  # tighter in low vol
-        base_max *= 0.8
+        base_max *= 0.85
 
-    # Session adjustments
+    # Session adjustments (scalping favors high-volume sessions)
     if session == "asian":
-        base_min *= 0.8
+        base_min *= 0.85  # Very tight scalping in Asian session
         base_max *= 0.9
     elif session == "london":
-        base_min *= 1.1
-        base_max *= 1.2
+        base_min *= 1.05  # Slightly wider in London
+        base_max *= 1.1
     elif session == "newyork":
-        base_min *= 1.2
-        base_max *= 1.3
+        base_min *= 1.1  # Wider in NY (more volatility)
+        base_max *= 1.15
 
     # Win rate adjustments
     if win_rate_24h < 40:
-        base_min *= 0.7  # reduce greed when losing
-        base_max *= 0.8
+        base_min *= 0.8  # reduce greed when losing
+        base_max *= 0.85
 
     return base_min, base_max
 
 def get_dynamic_atr_multiplier_sl(volatility: float, trend_strength: float) -> float:
-    """Dynamic ATR multiplier for SL based on volatility and trend"""
-    base = 2.2
+    """Dynamic ATR multiplier for SL based on volatility and trend - SCALPING optimized"""
+    base = 1.5  # Tighter SL for scalping (was 2.2)
 
     if volatility > 2.5:
-        base *= 1.5  # wider SL in high vol
+        base *= 1.3  # wider SL in high vol
     elif volatility < 0.8:
-        base *= 0.8  # tighter SL in low vol
+        base *= 0.7  # very tight SL in low vol
 
     if trend_strength > 70:
-        base *= 0.9  # slightly tighter in strong trends
+        base *= 0.85  # tighter in strong trends
 
     return base
 
-# Legacy constants for backward compatibility
-TP_RR_MIN = 1.8
-TP_RR_MAX = 4.0
-ATR_MULTIPLIER_SL = 2.2
-TP_RISK_REWARD = 2.0
+# SCALPING optimized constants (tighter TP/SL for quick profits)
+TP_RR_MIN = 1.2  # Lower RR for scalping (was 1.8)
+TP_RR_MAX = 2.5  # Lower max RR for scalping (was 4.0)
+ATR_MULTIPLIER_SL = 1.5  # Tighter SL for scalping (was 2.2)
+TP_RISK_REWARD = 1.5  # Scalping target (was 2.0)
 
 ############################
 # ✅ DYNAMIC CONFIDENCE & SIGNAL STRENGTH RULES

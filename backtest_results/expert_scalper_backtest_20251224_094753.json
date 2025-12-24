@@ -1,0 +1,30 @@
+{
+  "initial_balance": 10000,
+  "final_balance": 9992.319999999992,
+  "total_pnl": -7.68000000000665,
+  "total_pips": 5.499999999992724,
+  "total_trades": 2,
+  "win_rate": 50.0,
+  "winners": 1,
+  "losers": 1,
+  "avg_win": 42.83999999999378,
+  "avg_loss": -50.52000000000043,
+  "profit_factor": 0.8479809976245728,
+  "max_drawdown": -0.5052000000000043,
+  "session_stats": {
+    "ny": {
+      "trades": 2,
+      "pnl": -7.68000000000665,
+      "winners": 1
+    }
+  },
+  "stats": {
+    "signals_generated": 1950,
+    "signals_passed": 9,
+    "trades_opened": 2,
+    "trades_closed": 2,
+    "winners": 1,
+    "losers": 1,
+    "breakeven": 0
+  }
+}

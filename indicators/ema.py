@@ -64,20 +64,305 @@ def get_ema_trend(data, period=14, column='close'):
         column (str): Column to calculate EMA on
 
     Returns:
-        str: 'up', 'down', or 'sideways'
+        int: 1 (uptrend), -1 (downtrend), 0 (sideways)
     """
     ema = calculate_ema(data, period, column)
+    close = data[column].values
 
-    # Calculate slope over last few periods
-    recent_ema = ema.tail(5)
-    slope = np.polyfit(range(len(recent_ema)), recent_ema.values, 1)[0]
-
-    if slope > 0.01:  # Small threshold to avoid noise
-        return 'up'
-    elif slope < -0.01:
-        return 'down'
+    # Determine trend based on price vs EMA
+    if close[-1] > ema.iloc[-1]:
+        return 1  # Uptrend
+    elif close[-1] < ema.iloc[-1]:
+        return -1  # Downtrend
     else:
-        return 'sideways'
+        return 0  # Sideways
+
+def get_ema_crossover_signal(fast_ema, slow_ema):
+    """
+    Detect EMA crossover signal.
+
+    Args:
+        fast_ema (pd.Series): Fast EMA values
+        slow_ema (pd.Series): Slow EMA values
+
+    Returns:
+        int: 1 (bullish crossover), -1 (bearish crossover), 0 (no crossover)
+    """
+    if len(fast_ema) < 2 or len(slow_ema) < 2:
+        return 0
+    
+    # Check if crossover happened
+    if fast_ema.iloc[-2] <= slow_ema.iloc[-2] and fast_ema.iloc[-1] > slow_ema.iloc[-1]:
+        return 1  # Bullish crossover
+    elif fast_ema.iloc[-2] >= slow_ema.iloc[-2] and fast_ema.iloc[-1] < slow_ema.iloc[-1]:
+        return -1  # Bearish crossover
+    else:
+        return 0  # No crossover
+
+def is_bullish_ema(data, fast_period=12, slow_period=26, column='close'):
+    """
+    Check if EMA indicates bullish trend.
+
+    Args:
+        data (pd.DataFrame): OHLC data
+        fast_period (int): Fast EMA period
+        slow_period (int): Slow EMA period
+        column (str): Column to calculate on
+
+    Returns:
+        bool: True if bullish
+    """
+    fast_ema = calculate_ema(data, fast_period, column)
+    slow_ema = calculate_ema(data, slow_period, column)
+    
+    return fast_ema.iloc[-1] > slow_ema.iloc[-1]
+
+def is_bearish_ema(data, fast_period=12, slow_period=26, column='close'):
+    """
+    Check if EMA indicates bearish trend.
+
+    Args:
+        data (pd.DataFrame): OHLC data
+        fast_period (int): Fast EMA period
+        slow_period (int): Slow EMA period
+        column (str): Column to calculate on
+
+    Returns:
+        bool: True if bearish
+    """
+    fast_ema = calculate_ema(data, fast_period, column)
+    slow_ema = calculate_ema(data, slow_period, column)
+    
+    return fast_ema.iloc[-1] < slow_ema.iloc[-1]
+
+def calculate_ema_stack(data, periods=None, column='close'):
+    """
+    Calculate multiple EMAs for scalping stack analysis.
+    
+    Default scalping stack: 8, 13, 21 (Fibonacci-based fast periods)
+    Traditional stack: 9, 20, 50
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        periods (list): List of EMA periods (default: [8, 13, 21])
+        column (str): Column to calculate EMA on (default: 'close')
+    
+    Returns:
+        dict: Dictionary with period as key and EMA series as value
+            Example: {8: Series(...), 13: Series(...), 21: Series(...)}
+    """
+    if periods is None:
+        periods = [8, 13, 21]  # Scalping stack default
+    
+    ema_stack = {}
+    for period in periods:
+        ema_stack[period] = calculate_ema(data, period, column)
+    
+    return ema_stack
+
+def is_ema_stack_bullish(data, periods=None, column='close'):
+    """
+    Check if EMA stack indicates bullish alignment.
+    
+    Bullish: Fastest EMA > Middle EMA > Slowest EMA
+    Example: EMA(8) > EMA(13) > EMA(21)
+    
+    This indicates strong uptrend momentum suitable for scalping longs.
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        periods (list): List of EMA periods (default: [8, 13, 21])
+        column (str): Column to calculate on
+    
+    Returns:
+        bool: True if stack is bullish aligned
+    """
+    if periods is None:
+        periods = [8, 13, 21]
+    
+    if len(periods) < 2:
+        raise ValueError("At least 2 periods required for stack analysis")
+    
+    ema_stack = calculate_ema_stack(data, periods, column)
+    sorted_periods = sorted(periods)
+    
+    # Check if EMAs are in ascending order (fastest > ... > slowest)
+    for i in range(len(sorted_periods) - 1):
+        fast = ema_stack[sorted_periods[i]].iloc[-1]
+        slow = ema_stack[sorted_periods[i + 1]].iloc[-1]
+        
+        if fast <= slow:
+            return False
+    
+    return True
+
+def is_ema_stack_bearish(data, periods=None, column='close'):
+    """
+    Check if EMA stack indicates bearish alignment.
+    
+    Bearish: Fastest EMA < Middle EMA < Slowest EMA
+    Example: EMA(8) < EMA(13) < EMA(21)
+    
+    This indicates strong downtrend momentum suitable for scalping shorts.
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        periods (list): List of EMA periods (default: [8, 13, 21])
+        column (str): Column to calculate on
+    
+    Returns:
+        bool: True if stack is bearish aligned
+    """
+    if periods is None:
+        periods = [8, 13, 21]
+    
+    if len(periods) < 2:
+        raise ValueError("At least 2 periods required for stack analysis")
+    
+    ema_stack = calculate_ema_stack(data, periods, column)
+    sorted_periods = sorted(periods)
+    
+    # Check if EMAs are in descending order (fastest < ... < slowest)
+    for i in range(len(sorted_periods) - 1):
+        fast = ema_stack[sorted_periods[i]].iloc[-1]
+        slow = ema_stack[sorted_periods[i + 1]].iloc[-1]
+        
+        if fast >= slow:
+            return False
+    
+    return True
+
+def get_ema_stack_alignment(data, periods=None, column='close'):
+    """
+    Get detailed EMA stack alignment analysis.
+    
+    Returns a comprehensive view of the stack structure including:
+    - Alignment type (bullish, bearish, mixed)
+    - Spacing between EMAs (tight = consolidation, wide = trending)
+    - Price position relative to stack
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        periods (list): List of EMA periods (default: [8, 13, 21])
+        column (str): Column to calculate on
+    
+    Returns:
+        dict: {
+            'alignment': str ('bullish', 'bearish', 'mixed'),
+            'strength': float (0-100, based on spacing and order),
+            'price_position': str ('above_all', 'below_all', 'within_stack'),
+            'spacing': str ('tight', 'normal', 'wide'),
+            'emas': dict of current EMA values
+        }
+    """
+    if periods is None:
+        periods = [8, 13, 21]
+    
+    ema_stack = calculate_ema_stack(data, periods, column)
+    sorted_periods = sorted(periods)
+    current_price = data[column].iloc[-1]
+    
+    # Get EMA values
+    ema_values = {p: ema_stack[p].iloc[-1] for p in sorted_periods}
+    
+    # Determine alignment
+    if is_ema_stack_bullish(data, periods, column):
+        alignment = 'bullish'
+    elif is_ema_stack_bearish(data, periods, column):
+        alignment = 'bearish'
+    else:
+        alignment = 'mixed'
+    
+    # Calculate spacing (as percentage of price)
+    min_ema = min(ema_values.values())
+    max_ema = max(ema_values.values())
+    spacing_pct = ((max_ema - min_ema) / current_price) * 100
+    
+    if spacing_pct < 0.1:
+        spacing = 'tight'  # Consolidation
+    elif spacing_pct < 0.3:
+        spacing = 'normal'
+    else:
+        spacing = 'wide'  # Strong trend
+    
+    # Price position
+    if current_price > max_ema:
+        price_position = 'above_all'
+    elif current_price < min_ema:
+        price_position = 'below_all'
+    else:
+        price_position = 'within_stack'
+    
+    # Calculate strength (0-100)
+    # Perfect alignment = 100, random = 0
+    if alignment in ['bullish', 'bearish']:
+        # Base strength from proper ordering
+        base_strength = 60
+        
+        # Bonus for price position
+        if alignment == 'bullish' and price_position == 'above_all':
+            base_strength += 20
+        elif alignment == 'bearish' and price_position == 'below_all':
+            base_strength += 20
+        
+        # Bonus for wide spacing (strong trend)
+        if spacing == 'wide':
+            base_strength += 20
+        elif spacing == 'normal':
+            base_strength += 10
+        
+        strength = min(100, base_strength)
+    else:
+        # Mixed alignment = weak signal
+        strength = 30
+    
+    return {
+        'alignment': alignment,
+        'strength': strength,
+        'price_position': price_position,
+        'spacing': spacing,
+        'emas': ema_values,
+        'spacing_pct': spacing_pct
+    }
+
+def add_ema_stack_signals(data, periods=None, column='close'):
+    """
+    Add EMA stack columns and signals to DataFrame.
+    
+    Args:
+        data (pd.DataFrame): OHLC data
+        periods (list): List of EMA periods (default: [8, 13, 21])
+        column (str): Column to calculate on
+    
+    Returns:
+        pd.DataFrame: Data with EMA stack columns added:
+            - EMA_8, EMA_13, EMA_21 (or custom periods)
+            - ema_stack_signal: 1 (bullish), -1 (bearish), 0 (mixed)
+            - ema_stack_strength: 0-100 alignment strength
+    """
+    if periods is None:
+        periods = [8, 13, 21]
+    
+    df = data.copy()
+    
+    # Calculate all EMAs
+    ema_stack = calculate_ema_stack(df, periods, column)
+    for period, values in ema_stack.items():
+        df[f'EMA_{period}'] = values
+    
+    # Add alignment signal and strength
+    alignment = get_ema_stack_alignment(df, periods, column)
+    
+    if alignment['alignment'] == 'bullish':
+        df['ema_stack_signal'] = 1
+    elif alignment['alignment'] == 'bearish':
+        df['ema_stack_signal'] = -1
+    else:
+        df['ema_stack_signal'] = 0
+    
+    df['ema_stack_strength'] = alignment['strength']
+    
+    return df
 
 if __name__ == "__main__":
     # Example usage

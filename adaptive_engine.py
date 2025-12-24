@@ -305,7 +305,9 @@ class AdaptiveEngine:
         self.market_data = market_data
 
     def process_signals(self, signals: Dict[str, float]) -> bool:
-        """Process signals and determine if trading is allowed"""
+        """Process signals and determine if trading is allowed.
+        Signature: process_signals(signals_dict) - expects market_data already set via update_market_data()
+        """
         if not self.market_data:
             return False
 

@@ -104,6 +104,46 @@ def connect_to_mt5():
     """Establish MT5 connection via Flask API."""
     return init_mt5(), "Connected to MT5 via API" if init_mt5() else "Failed to connect to MT5 via API"
 
+def get_signal_context():
+    """Fetch latest signal/risk context from Flask API."""
+    try:
+        resp = requests.get("http://127.0.0.1:5001/signal_context", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.exceptions.RequestException:
+        pass
+    return {}
+
+def get_broker_specs():
+    """Fetch broker specs (digits, min stop distance)."""
+    try:
+        resp = requests.get("http://127.0.0.1:5001/broker_specs", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.exceptions.RequestException:
+        pass
+    return {}
+
+def get_news_state():
+    """Fetch latest news state from Flask API."""
+    try:
+        resp = requests.get("http://127.0.0.1:5001/news_state", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.exceptions.RequestException:
+        pass
+    return {}
+
+def get_economic_events():
+    """Fetch upcoming economic events from Flask API (if available)."""
+    try:
+        resp = requests.get("http://127.0.0.1:5001/economic_events", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except requests.exceptions.RequestException:
+        pass
+    return {"events": [], "gating_enabled": False}
+
 # ======= HEADER SECTION =======
 col_theme, col_title = st.columns([1, 4])
 with col_theme:
@@ -393,6 +433,59 @@ with st.sidebar:
                     </div>
                 </div>
                 ''', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                # Live Signal & Risk Overview
+                st.markdown('<div class="account-card">', unsafe_allow_html=True)
+                st.markdown('<div class="account-header">🎯 Live Signal & Risk</div>', unsafe_allow_html=True)
+                sig = get_signal_context() or {}
+                specs = get_broker_specs() or {}
+                news = get_news_state() or {}
+                cols = st.columns(4)
+                with cols[0]:
+                    st.metric("Signal", sig.get("signal", "HOLD"))
+                    st.metric("Strength", f"{sig.get('strength', 0):.1f}%")
+                    st.metric("Regime", sig.get("regime", "unknown"))
+                with cols[1]:
+                    st.metric("Price", f"{sig.get('price', 0):.2f}")
+                    st.metric("ATR", f"{sig.get('atr', 0):.2f}")
+                    st.metric("Volatility", f"{sig.get('volatility', 0):.3f}")
+                with cols[2]:
+                    rr = sig.get('dynamic_rr')
+                    st.metric("RR", f"{rr:.2f}x" if rr is not None else "N/A")
+                    lot = sig.get('dynamic_lot')
+                    st.metric("Lot", f"{lot:.2f}" if lot is not None else "N/A")
+                    st.metric("Risk Mode", sig.get("risk_mode", "balanced"))
+                with cols[3]:
+                    st.metric("SL Distance", f"{sig.get('sl_distance', 0):.2f}")
+                    st.metric("Min Stop", f"{specs.get('min_stop_distance', 0):.2f}")
+                    st.metric("Digits", specs.get("digits", 2))
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # News & Gating State
+                st.markdown('<div class="account-card">', unsafe_allow_html=True)
+                st.markdown('<div class="account-header">📰 News & Gating</div>', unsafe_allow_html=True)
+                gating_enabled = getattr(config, 'NEWS_GATING_ENABLED', False)
+                col_ng1, col_ng2, col_ng3 = st.columns(3)
+                with col_ng1:
+                    st.metric("Gating", "Enabled" if gating_enabled else "Disabled")
+                with col_ng2:
+                    st.metric("Sentiment", news.get("news_sentiment", "neutral"))
+                with col_ng3:
+                    impact = news.get("news_impact")
+                    st.metric("Impact", f"{impact:.2f}" if isinstance(impact, (float, int)) else "N/A")
+                st.caption(f"Updated: {sig.get('updated_at', 'n/a')}")
+                # Upcoming events panel
+                ev = get_economic_events()
+                events = ev.get("events", []) or []
+                if events:
+                    st.subheader("Upcoming Events (today/tomorrow)")
+                    for e in events[:6]:
+                        name = e.get('name') or e.get('title') or 'Event'
+                        when = e.get('time') or e.get('datetime') or 'unknown'
+                        impact = e.get('impact') or e.get('importance') or 'n/a'
+                        st.text(f"• {name} — {impact} — {when}")
+                else:
+                    st.info("No upcoming economic events available.")
                 st.markdown('</div>', unsafe_allow_html=True)
                 with st.expander("📋 Account Details", expanded=False):
                     col1, col2 = st.columns(2)

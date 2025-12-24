@@ -62,7 +62,7 @@ def add_rsi_signals(data, period=14, overbought=70, oversold=30, column='close')
 
     return df
 
-def get_rsi_condition(data, period=14, column='close'):
+def get_rsi_condition(data, period=14, column='close', overbought=70, oversold=30):
     """
     Get RSI condition description.
 
@@ -70,49 +70,80 @@ def get_rsi_condition(data, period=14, column='close'):
         data (pd.DataFrame): OHLC data
         period (int): RSI period
         column (str): Column to calculate RSI on
+        overbought (int): Overbought threshold
+        oversold (int): Oversold threshold
 
     Returns:
         str: RSI condition ('overbought', 'oversold', 'neutral')
     """
     rsi = calculate_rsi(data, period, column).iloc[-1]
 
-    if rsi >= 70:
+    if rsi >= overbought:
         return 'overbought'
-    elif rsi <= 30:
+    elif rsi <= oversold:
         return 'oversold'
     else:
         return 'neutral'
 
-def rsi_divergence(data, period=14, column='close'):
+def get_rsi_signal(rsi_value, overbought=70, oversold=30):
     """
-    Detect RSI divergence (basic implementation).
+    Get RSI trading signal.
+    
+    Args:
+        rsi_value (float): Current RSI value
+        overbought (int): Overbought threshold
+        oversold (int): Oversold threshold
+    
+    Returns:
+        int: 1 (bullish), -1 (bearish), 0 (neutral)
+    """
+    if rsi_value > overbought:
+        return -1  # Overbought, potential sell
+    elif rsi_value < oversold:
+        return 1  # Oversold, potential buy
+    else:
+        return 0  # Neutral
+
+def is_rsi_overbought(rsi_value, threshold=70):
+    """Check if RSI is overbought."""
+    return rsi_value > threshold
+
+def is_rsi_oversold(rsi_value, threshold=30):
+    """Check if RSI is oversold."""
+    return rsi_value < threshold
+
+def detect_rsi_divergence(data, period=14, column='close', lookback=20):
+    """
+    Detect RSI divergence (price vs RSI).
 
     Args:
         data (pd.DataFrame): OHLC data
         period (int): RSI period
         column (str): Column to calculate RSI on
+        lookback (int): Number of periods to look back
 
     Returns:
-        str: Divergence type ('bullish', 'bearish', 'none')
+        dict: {'bullish_div': bool, 'bearish_div': bool}
     """
-    if len(data) < period * 2:
-        return 'none'
+    if len(data) < max(period * 2, lookback):
+        return {'bullish_div': False, 'bearish_div': False}
 
     # Get recent data
-    recent_data = data.tail(period * 2)
-    prices = recent_data[column]
-    rsi_values = calculate_rsi(recent_data, period, column)
+    recent_data = data.tail(lookback)
+    prices = recent_data[column].values
+    rsi_values = calculate_rsi(recent_data, period, column).values
 
-    # Simple divergence detection (price vs RSI)
-    price_trend = 'up' if prices.iloc[-1] > prices.iloc[0] else 'down'
-    rsi_trend = 'up' if rsi_values.iloc[-1] > rsi_values.iloc[0] else 'down'
-
-    if price_trend == 'down' and rsi_trend == 'up':
-        return 'bullish'  # Price falling, RSI rising = potential reversal up
-    elif price_trend == 'up' and rsi_trend == 'down':
-        return 'bearish'  # Price rising, RSI falling = potential reversal down
-    else:
-        return 'none'
+    bullish_div = False
+    bearish_div = False
+    
+    # Bullish divergence: lower lows in price, higher lows in RSI
+    if len(prices) > 1 and len(rsi_values) > 1:
+        if prices[-1] < prices[0] and rsi_values[-1] > rsi_values[0]:
+            bullish_div = True
+        elif prices[-1] > prices[0] and rsi_values[-1] < rsi_values[0]:
+            bearish_div = True
+    
+    return {'bullish_div': bullish_div, 'bearish_div': bearish_div}
 
 if __name__ == "__main__":
     # Example usage

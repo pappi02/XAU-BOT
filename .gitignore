@@ -9,6 +9,7 @@ venv*/
 .env/
 venv*/
 venv312/
+xau@/
 
 # Jupyter
 .ipynb_checkpoints
@@ -41,3 +42,6 @@ Thumbs.db
 
 
 TODO.md
+
+
+.backtest_results/

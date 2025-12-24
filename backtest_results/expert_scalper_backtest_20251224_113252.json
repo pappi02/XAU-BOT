@@ -1,0 +1,30 @@
+{
+  "initial_balance": 10000,
+  "final_balance": 10175.361814003265,
+  "total_pnl": 175.361814003267,
+  "total_pips": 32.859694365433825,
+  "total_trades": 5,
+  "win_rate": 80.0,
+  "winners": 4,
+  "losers": 0,
+  "avg_win": 43.86500429169115,
+  "avg_loss": 0,
+  "profit_factor": 0,
+  "max_drawdown": 0.0,
+  "session_stats": {
+    "london": {
+      "trades": 5,
+      "pnl": 175.361814003267,
+      "winners": 4
+    }
+  },
+  "stats": {
+    "signals_generated": 150,
+    "signals_passed": 5,
+    "trades_opened": 5,
+    "trades_closed": 5,
+    "winners": 4,
+    "losers": 0,
+    "breakeven": 1
+  }
+}

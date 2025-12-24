@@ -1,3 +1,10 @@
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import time
 import random
 import sqlite3
@@ -6,6 +13,7 @@ from datetime import datetime, timedelta
 from datetime import time as dt_time
 from logger_config import setup_logger
 from risk.smart_risk import calculate_adaptive_lot, get_safe_lot
+from utils.symbol_helpers import resolve_symbol, round_price, get_symbol_digits, get_min_stop_distance, validate_sl_tp, enforce_rr_minimum
 
 class AdaptiveExposureController:
     def __init__(self, config, logger):
@@ -214,11 +222,30 @@ class TradeExecutor:
         if terminal_info is None or not terminal_info.trade_allowed:
             raise RuntimeError("Auto-trading is disabled in MetaTrader 5 terminal.")
 
+        # Resolve symbol to canonical form
+        symbol = resolve_symbol(symbol)
+        
         order_type = self.mt5.ORDER_TYPE_BUY if is_buy else self.mt5.ORDER_TYPE_SELL
         tick = self.mt5.symbol_info_tick(symbol)
         if tick is None:
             raise RuntimeError("No tick data available")
         price = float(tick.ask if is_buy else tick.bid)
+
+        # Get symbol specs for rounding and validation
+        digits = get_symbol_digits(self.mt5, symbol)
+        min_stop_distance = get_min_stop_distance(self.mt5, symbol)
+
+        # Validate and enforce SL/TP invariants
+        sl_price, tp_price = validate_sl_tp(price, sl_price, tp_price, is_buy, min_stop_distance)
+        
+        # Enforce minimum RR ratio
+        rr_min = getattr(self.config, 'TP_RR_MIN', 1.8)
+        sl_price, tp_price = enforce_rr_minimum(price, sl_price, tp_price, is_buy, rr_min)
+        
+        # Round prices to correct decimal places per symbol
+        price = round_price(price, digits)
+        sl_price = round_price(sl_price, digits) if sl_price else 0.0
+        tp_price = round_price(tp_price, digits) if tp_price else 0.0
 
         request = {
             "action": self.mt5.TRADE_ACTION_DEAL,
@@ -226,8 +253,8 @@ class TradeExecutor:
             "volume": float(volume),
             "type": order_type,
             "price": price,
-            "sl": float(sl_price) if sl_price else 0.0,
-            "tp": float(tp_price) if tp_price else 0.0,
+            "sl": sl_price,
+            "tp": tp_price,
             "deviation": self.config.ORDER_DEVIATION,
             "magic": MAGIC,
             "comment": "XAU Bot Auto",
@@ -235,8 +262,20 @@ class TradeExecutor:
             "type_filling": self.mt5.ORDER_FILLING_IOC,
         }
 
+        logger.info(f"Order request: {symbol} {'BUY' if is_buy else 'SELL'} {volume} @ {price:.{digits}f} | SL={sl_price:.{digits}f} TP={tp_price:.{digits}f} | RR={(tp_price - price) / (price - sl_price):.2f}x" if is_buy else f"RR={(price - tp_price) / (sl_price - price):.2f}x")
+
         last_err = None
         for attempt in range(self.config.ORDER_RETRY):
+            # Refresh tick before each retry
+            tick = self.mt5.symbol_info_tick(symbol)
+            if tick is None:
+                logger.warning(f"Order attempt {attempt+1}: No tick data available")
+                time.sleep(1)
+                continue
+            
+            # Update price to latest
+            request["price"] = round_price(float(tick.ask if is_buy else tick.bid), digits)
+            
             result = self.mt5.order_send(request)
             try:
                 retcode = result.retcode
@@ -244,14 +283,14 @@ class TradeExecutor:
                 retcode = None
 
             if retcode == self.mt5.TRADE_RETCODE_DONE:
-                logger.info(f"Order success: {result}")
+                logger.info(f"✅ Order success: ticket={result.order if hasattr(result, 'order') else 'N/A'}, {result}")
                 return result
             else:
-                logger.warning(f"Order attempt {attempt+1} failed: {result}")
+                logger.warning(f"Order attempt {attempt+1} failed (retcode={retcode}): {result}")
                 last_err = result
                 time.sleep(1)
 
-        raise RuntimeError(f"Order failed after retries: {last_err}")
+        raise RuntimeError(f"Order failed after {self.config.ORDER_RETRY} retries: {last_err}")
 
     def enter_trade(self, symbol, signal, entry_price, stop_price, tp_price=None, volume=None):
         is_buy = signal.upper() == "BUY"

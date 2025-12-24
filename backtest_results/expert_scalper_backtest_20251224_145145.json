@@ -1,0 +1,45 @@
+{
+  "initial_balance": 10000,
+  "final_balance": 14735.639999996496,
+  "total_pnl": 4735.63999999648,
+  "total_pips": 2151.0999999987325,
+  "total_trades": 848,
+  "win_rate": 50.82547169811321,
+  "winners": 431,
+  "losers": 391,
+  "avg_win": 63.43823665892444,
+  "avg_loss": -57.81647058823518,
+  "profit_factor": 1.2094837531582656,
+  "max_drawdown": -6.628400000000329,
+  "session_stats": {
+    "london": {
+      "trades": 200,
+      "pnl": 72.56999999908203,
+      "winners": 90
+    },
+    "overlap": {
+      "trades": 122,
+      "pnl": 501.1799999994764,
+      "winners": 59
+    },
+    "ny": {
+      "trades": 190,
+      "pnl": 2017.9999999993925,
+      "winners": 110
+    },
+    "asian": {
+      "trades": 336,
+      "pnl": 2143.8899999985288,
+      "winners": 172
+    }
+  },
+  "stats": {
+    "signals_generated": 1950,
+    "signals_passed": 848,
+    "trades_opened": 848,
+    "trades_closed": 848,
+    "winners": 431,
+    "losers": 391,
+    "breakeven": 26
+  }
+}
