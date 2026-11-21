@@ -1,0 +1,83 @@
+XAUUSD H1 backtest -- live rules, realistic costs
+=================================================
+  Period                         2009-09-02 16:00:00+00:00 -> 2010-10-03 23:00:00+00:00
+  Initial / final balance        $1,000.00 -> $870.85
+  Net profit (return)            $-129.15 (-12.92%)
+  Total trades                   170
+  Wins / losses / breakeven      57 / 113 / 0
+  Win rate                       33.53%
+  Gross profit / gross loss      $828.68 / $-957.83
+  Profit factor                  0.865
+  Expectancy per trade           $-0.76 (-0.085 R)
+  t-statistic of mean            -0.842
+  Average win / average loss     $14.54 / $-8.48
+  Payoff ratio                   1.715
+  Maximum win                    $29.40 BUY 0.02 lots, 2009-11-16 18:00:00+00:00 (take_profit)
+  Maximum loss                   $-11.02 BUY 0.03 lots, 2009-12-11 13:00:00+00:00 (stop_loss)
+  Longest win / loss streak      4 / 8
+  Max drawdown                   $210.56 (19.56%), longest 305.0 days
+  Average holding time           638.8 min
+  Total lots traded              4.53
+  Costs                          spread $86.51, commission $31.71, swap $17.92, slippage $23.24 = $159.38 (200.4% of gross)
+
+  By direction
+                                        trades    win %      net P&L  expectancy
+    BUY                                    145    34.5%      $-62.98      $-0.43
+    SELL                                    25    28.0%      $-66.18      $-2.65
+
+  By exit reason
+                                        trades    win %      net P&L  expectancy
+    take_profit                             39   100.0%      $720.44      $18.47
+    stop_loss                              100     0.0%     $-880.62      $-8.81
+    time_based_exit                         18    94.4%      $102.82       $5.71
+    break_of_structure                      10    10.0%      $-41.66      $-4.17
+    stop_loss (ambiguous bar, pessimis       1     0.0%      $-10.51     $-10.51
+    stop_loss (gap)                          2     0.0%      $-19.63      $-9.82
+
+  By session
+                                        trades    win %      net P&L  expectancy
+    New York                                28    32.1%      $-45.28      $-1.62
+    Asian                                   38    28.9%      $-10.08      $-0.27
+    London                                  51    37.3%        $2.90       $0.06
+    London/NY overlap                       52    34.6%      $-68.24      $-1.31
+    Other                                    1     0.0%       $-8.44      $-8.44
+
+  By year
+                                        trades    win %      net P&L  expectancy
+    2009                                    57    33.3%        $1.39       $0.02
+    2010                                   113    33.6%     $-130.54      $-1.16
+
+  By month
+                                        trades    win %      net P&L  expectancy
+    2009-09                                 16    43.8%       $27.11       $1.69
+    2009-10                                 13    23.1%      $-40.29      $-3.10
+    2009-11                                 15    40.0%       $48.31       $3.22
+    2009-12                                 13    23.1%      $-33.73      $-2.60
+    2010-01                                  8    12.5%      $-27.40      $-3.42
+    2010-02                                 11    45.5%       $28.87       $2.62
+    2010-03                                 16    43.8%       $17.87       $1.12
+    2010-04                                  8    12.5%      $-43.57      $-5.45
+    2010-05                                 20    35.0%      $-19.85      $-0.99
+    2010-06                                 10    40.0%      $-17.25      $-1.73
+    2010-07                                 11    54.5%       $26.43       $2.40
+    2010-08                                 14    21.4%      $-51.17      $-3.65
+    2010-09                                 14    21.4%      $-49.52      $-3.54
+    2010-10                                  1   100.0%        $5.05       $5.05
+
+  Blocked entries
+    strength below minimum                   45199
+    drawdown halt                            9508
+    event blackout                           729
+    position cap                             615
+    too close to weekly close                102
+    loss-streak halt                         12
+
+  Halts
+    loss_streak                              10
+    drawdown                                 1
+
+  Declined trades                0
+
+  Bars                           99699
+
+  Notes                          live rules incl. sticky drawdown halt; costs: measured session spreads, real swap, unverified commission/slippage

@@ -1,51 +1,84 @@
-import sqlite3
 import logging
+import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional
 
-<<<<<<< HEAD
-"""
-Persistent trade logging using SQLite database.
-Logs all trades, positions, and P&L for analysis and dashboard.
+from utils import db
+
+"""Persistent trade logging using SQLite.
+
+NOTE (Phase 7.2, audit H-07): ``log_trade_entry``, ``log_trade_exit`` and
+``update_position`` below are implemented but **called from nowhere**, and have
+been since the audit. They are retained only because the dashboard's schema
+depends on the tables they write. Do not build on them.
+
+Realised P&L is now sourced from the broker via
+``execution.position_state.PositionStateStore``, which records every closing
+deal -- including the server-side stop-outs this module never saw. Statistics
+here delegate to it. Phase 12 should delete the unused writers.
 """
 
 class TradeLogger:
+    def _broker_store(self):
+        """The broker-sourced record store (Phase 7.2), sharing this database."""
+        from execution.position_state import PositionStateStore
+        return PositionStateStore(self.db_path)
+
     def compute_statistics(self) -> dict:
+        """Trading statistics from the BROKER's realised deals.
+
+        Phase 7.2 follow-up (audit H-07). This used to sum the local `trades`
+        table, whose only writer recorded the FLOATING P&L read before a close
+        was sent -- and which never saw a trade closed by a server-side stop at
+        all.
+
+        Stop-outs are the loss-heavy tail, so those statistics were biased
+        upward BY CONSTRUCTION. The dashboard would have kept showing a
+        flattering win rate even after Phase 7.2 started recording the truth,
+        because it was reading the wrong table. It now reads the broker's.
+
+        Falls back to the legacy table only if the broker table is empty AND the
+        legacy table is not, so historical data is not simply hidden -- and says
+        so in `source`.
         """
-        Compute trading statistics: total trades, win rate, avg profit, total pnl, best/worst trade.
-        Returns:
-            dict: Statistics summary
-        """
-        with sqlite3.connect(self.db_path) as conn:
+        stats = self._broker_store().compute_statistics()
+        if stats["total_trades"] > 0:
+            return stats
+
+        legacy = self._legacy_statistics()
+        if legacy["total_trades"] > 0:
+            legacy["source"] = "legacy_local_events (BIASED: omits stop-outs)"
+            logging.warning(
+                "No broker-sourced deals recorded yet; falling back to the "
+                "legacy local table. Those figures omit server-side stop-outs "
+                "and overstate the win rate (audit H-07).")
+            return legacy
+        return stats
+
+    def _legacy_statistics(self) -> dict:
+        """The old local-event statistics. Retained only for the fallback above."""
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # Get all closed trades with non-null pnl (including AUTO_CLOSED)
-            cursor.execute('''
-                SELECT pnl FROM trades WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
-            ''')
+            cursor.execute("""
+                SELECT pnl FROM trades
+                WHERE status IN ('CLOSED', 'AUTO_CLOSED') AND pnl IS NOT NULL
+            """)
             pnls = [row[0] for row in cursor.fetchall()]
-            total_trades = len(pnls)
-            total_pnl = sum(pnls) if pnls else 0.0
-            win_trades = len([p for p in pnls if p > 0])
-            loss_trades = len([p for p in pnls if p < 0])
-            win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0.0
-            avg_profit = (total_pnl / total_trades) if total_trades > 0 else 0.0
-            best_trade = max(pnls) if pnls else 0.0
-            worst_trade = min(pnls) if pnls else 0.0
-            return {
-                "total_trades": total_trades,
-                "win_rate": win_rate,
-                "avg_profit": avg_profit,
-                "total_pnl": total_pnl,
-                "best_trade": best_trade,
-                "worst_trade": worst_trade
-            }
-=======
-class TradeLogger:
-    """
-    Persistent trade logging using SQLite database.
-    Logs all trades, positions, and P&L for analysis and dashboard.
-    """
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
+
+        total_trades = len(pnls)
+        total_pnl = sum(pnls) if pnls else 0.0
+        win_trades = len([p for p in pnls if p > 0])
+        return {
+            "total_trades": total_trades,
+            "win_rate": (win_trades / total_trades * 100) if total_trades else 0.0,
+            "avg_profit": (total_pnl / total_trades) if total_trades else 0.0,
+            "total_pnl": total_pnl,
+            "best_trade": max(pnls) if pnls else 0.0,
+            "worst_trade": min(pnls) if pnls else 0.0,
+            "total_costs": 0.0,
+            "source": "legacy_local_events",
+        }
+
 
     def __init__(self, db_path: str = "trades.db"):
         self.db_path = db_path
@@ -53,7 +86,7 @@ class TradeLogger:
 
     def _init_db(self):
         """Initialize the database and create tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
             # Trades table
@@ -118,7 +151,7 @@ class TradeLogger:
         """
         timestamp = datetime.now().isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO trades (timestamp, symbol, side, entry_price, volume,
@@ -141,7 +174,7 @@ class TradeLogger:
         """
         timestamp = datetime.now().isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
             # Update the trade
@@ -174,7 +207,7 @@ class TradeLogger:
         """
         timestamp = datetime.now().isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
             # Check if position exists
@@ -212,7 +245,7 @@ class TradeLogger:
         """
         Get all currently open positions.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT trade_id, symbol, side, entry_price, current_price, volume,
@@ -226,20 +259,13 @@ class TradeLogger:
 
     def get_trade_history(self, limit: int = 100) -> List[Dict]:
         """
-<<<<<<< HEAD
         Get recent trade history (including AUTO_CLOSED trades).
-=======
-        Get recent trade history.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM trades
-<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
-=======
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
                 ORDER BY timestamp DESC
                 LIMIT ?
             ''', (limit,))
@@ -251,7 +277,7 @@ class TradeLogger:
         """
         Get daily P&L for the last N days.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM daily_pnl
@@ -263,23 +289,24 @@ class TradeLogger:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_total_pnl(self) -> float:
+        """Total realised P&L, from the broker's deals (Phase 7.2).
+
+        Same correction as compute_statistics: this summed a local table that
+        never saw a server-side stop-out.
         """
-<<<<<<< HEAD
-        Get total P&L across all closed trades (including AUTO_CLOSED).
-=======
-        Get total P&L across all closed trades.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
-        """
-        with sqlite3.connect(self.db_path) as conn:
+        stats = self.compute_statistics()
+        if stats["total_trades"] > 0:
+            return stats["total_pnl"]
+        return self._legacy_total_pnl()
+
+    def _legacy_total_pnl(self) -> float:
+        """The old local-event total. Fallback only."""
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT COALESCE(SUM(pnl), 0) as total_pnl
                 FROM trades
-<<<<<<< HEAD
                 WHERE status IN ('CLOSED', 'AUTO_CLOSED')
-=======
-                WHERE status = 'CLOSED'
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
             ''')
 
             result = cursor.fetchone()
@@ -299,7 +326,7 @@ class TradeLogger:
         """
         timestamp = datetime.now().isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
             # Insert as a special trade entry for auto-close logging

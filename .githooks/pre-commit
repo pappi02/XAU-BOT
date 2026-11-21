@@ -1,0 +1,49 @@
+#!/bin/sh
+# XAU-BOT secret-scanning pre-commit hook (Phase 0.2).
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass only with a written reason:  git commit --no-verify
+
+added=$(git diff --cached --diff-filter=ACM -U0 | grep '^+' | grep -v '^+++')
+[ -z "$added" ] && exit 0
+
+fail=0
+report() { printf '  %s\n' "$1"; fail=1; }
+
+# 1. Known leaked credential from the audit (H-10) -- must never reappear.
+echo "$added" | grep -q '2287da19b4ca4f6a9d2711431ca2278b' \
+  && report "revoked NewsAPI key 2287da19... reintroduced"
+
+# 2. Assignment of a long hex/base64 literal to a key/token/secret/password name.
+echo "$added" | grep -qiE '(api[_-]?key|secret|token|password|passwd|credential)[^=:]{0,20}[=:][[:space:]]*["'"'"'][A-Za-z0-9/+_-]{20,}["'"'"']' \
+  && report "hardcoded secret-looking literal assigned to a key/secret/token name"
+
+# 3. Common provider key shapes.
+echo "$added" | grep -qE '\b(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b' \
+  && report "provider API key pattern (OpenAI/GitHub/AWS/Slack)"
+
+# 4. A real .env must never be staged.
+git diff --cached --name-only | grep -qE '(^|/)\.env$' \
+  && report ".env is staged -- it is git-ignored for a reason"
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: secret scan FAILED. Commit blocked." >&2
+  echo "Remove the secret, put it in .env, and reference it via os.getenv()." >&2
+  exit 1
+fi
+
+# 5. Gate B checks (Phase 1.7) -- same as CI, run before the commit lands.
+PY=python
+[ -x env/Scripts/python.exe ] && PY=env/Scripts/python.exe
+
+if git diff --cached --name-only | grep -q '\.py$'; then
+  "$PY" -m compileall -q . -x 'env|__pycache__' >/dev/null 2>&1     || { echo "pre-commit: compileall FAILED. Commit blocked." >&2; exit 1; }
+  "$PY" tools/check_config.py >/dev/null 2>&1     || { echo "pre-commit: tools/check_config.py FAILED (duplicate or dead config key)." >&2
+         "$PY" tools/check_config.py >&2; exit 1; }
+fi
+
+if grep -rn '^<<<<<<<\|^>>>>>>>' --include='*.py' --include='.gitignore'      --exclude-dir=env --exclude-dir=.git . >/dev/null 2>&1; then
+  echo "pre-commit: conflict markers present. Commit blocked." >&2
+  exit 1
+fi
+
+exit 0

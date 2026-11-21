@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Gate B: every module compiles.
+      - name: Compile all modules
+        run: python -m compileall -q . -x "env|__pycache__"
+
+      # Gate B: zero conflict markers anywhere.
+      - name: No conflict markers
+        shell: bash
+        run: |
+          if grep -rn '^<<<<<<<\|^>>>>>>>' --include='*.py' --include='.gitignore' \
+               --exclude-dir=env --exclude-dir=.git .; then
+            echo "conflict markers found"; exit 1
+          fi
+          echo "clean"
+
+      # Gate B: no duplicate or dead config keys, no duplicate methods.
+      - name: Config integrity
+        run: python tools/check_config.py
+
+      # Gate B: the suite is green and blocking.
+      - name: Tests
+        run: pytest
+
+      # Phase 0: the revoked NewsAPI key must never come back.
+      - name: Secret scan
+        run: python tools/check_no_secrets.py

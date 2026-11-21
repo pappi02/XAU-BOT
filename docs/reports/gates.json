@@ -1,0 +1,8 @@
+{
+  "gate_c": {
+    "passed": false,
+    "verdict": "FAILED AT STEP 2 (Gate C): expectancy -0.2278 per trade over 1813 trades; costs 902.88 vs gross -111.08",
+    "data": "XAUUSD M5 MetaQuotes-Demo 2025-04-08 -> 2026-09-11 UTC, 99699 bars",
+    "evaluated_at": "2026-09-13T21:00:00+00:00"
+  }
+}

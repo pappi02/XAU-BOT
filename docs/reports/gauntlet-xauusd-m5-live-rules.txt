@@ -1,0 +1,10 @@
+Step 1 (zero-cost sanity): PASS -- 2052 trades (need >= 30), reconciles=True
+    trades = 2052
+    reconciles = True
+    expectancy = 0.3676260954469387
+Step 2 (realistic-cost expectancy): FAIL -- expectancy -0.2278 per trade over 1813 trades; costs 902.88 vs gross -111.08
+    expectancy = -0.22780476015951137
+    trades = 1813
+    profit_factor = 0.9526037668726179
+    costs = {'gross_pnl': -111.08203016919377, 'spread': 407.7321465822803, 'commission': 284.41, 'swap': 17.518, 'slippage': 193.22365021769716, 'total_costs': 902.8837967999774, 'net_pnl': -413.0100301691941, 'costs_as_fraction_of_gross': 8.128081521599459}
+VERDICT: FAILED AT STEP 2 (Gate C): expectancy -0.2278 per trade over 1813 trades; costs 902.88 vs gross -111.08. The plan's guidance is to STOP -- do not proceed to demo or live. Options: a different hypothesis, a higher timeframe where the spread is a smaller fraction of the expected move, or conclude there is no edge. The last is a legitimate outcome.

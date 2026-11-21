@@ -1,0 +1,218 @@
+{
+  "period": {
+    "first_entry": "2025-04-08 11:25:00+00:00",
+    "last_exit": "2025-08-08 12:15:00+00:00"
+  },
+  "initial_balance": 1000.0,
+  "final_balance": 1005.3,
+  "net_profit": 5.3,
+  "return_pct": 0.53,
+  "total_trades": 460,
+  "total_wins": 147,
+  "total_losses": 313,
+  "breakeven_trades": 0,
+  "win_rate_pct": 31.96,
+  "loss_rate_pct": 68.04,
+  "gross_profit": 3023.84,
+  "gross_loss": -3018.54,
+  "profit_factor": 1.002,
+  "expectancy_per_trade": 0.0115,
+  "expectancy_r": 0.0119,
+  "std_dev_per_trade": 14.8013,
+  "t_statistic": 0.017,
+  "average_win": 20.57,
+  "average_loss": -9.64,
+  "payoff_ratio": 2.133,
+  "maximum_win": {
+    "net_pnl": 38.89,
+    "direction": "SELL",
+    "lots": 0.03,
+    "entry_time": "2025-06-24 06:00:00+00:00",
+    "exit_time": "2025-06-24 06:35:00+00:00",
+    "exit_reason": "take_profit"
+  },
+  "maximum_loss": {
+    "net_pnl": -42.18,
+    "direction": "SELL",
+    "lots": 0.1,
+    "entry_time": "2025-08-06 20:30:00+00:00",
+    "exit_time": "2025-08-06 22:10:00+00:00",
+    "exit_reason": "stop_loss (gap)"
+  },
+  "longest_winning_streak": 7,
+  "longest_losing_streak": 12,
+  "max_drawdown_money": 240.36,
+  "max_drawdown_pct": 19.3,
+  "longest_drawdown_days": 20.3,
+  "average_holding_minutes": 55.1,
+  "total_lots": 17.42,
+  "costs": {
+    "spread": 174.36,
+    "commission": 121.94,
+    "swap": 6.76,
+    "slippage": 81.31,
+    "total": 384.37,
+    "gross_pnl_before_commission_swap": 134.0,
+    "costs_pct_of_gross": 286.9
+  },
+  "by_direction": {
+    "BUY": {
+      "trades": 344,
+      "wins": 111,
+      "net_pnl": 93.54,
+      "win_rate_pct": 32.3,
+      "expectancy": 0.272
+    },
+    "SELL": {
+      "trades": 116,
+      "wins": 36,
+      "net_pnl": -88.24,
+      "win_rate_pct": 31.0,
+      "expectancy": -0.761
+    }
+  },
+  "by_exit_reason": {
+    "stop_loss": {
+      "trades": 275,
+      "wins": 0,
+      "net_pnl": -2723.75,
+      "win_rate_pct": 0.0,
+      "expectancy": -9.905
+    },
+    "take_profit": {
+      "trades": 133,
+      "wins": 133,
+      "net_pnl": 2937.47,
+      "win_rate_pct": 100.0,
+      "expectancy": 22.086
+    },
+    "break_of_structure": {
+      "trades": 44,
+      "wins": 13,
+      "net_pnl": -90.89,
+      "win_rate_pct": 29.5,
+      "expectancy": -2.066
+    },
+    "stop_loss (ambiguous bar, pessimistic)": {
+      "trades": 2,
+      "wins": 0,
+      "net_pnl": -20.58,
+      "win_rate_pct": 0.0,
+      "expectancy": -10.288
+    },
+    "market_session_end": {
+      "trades": 1,
+      "wins": 1,
+      "net_pnl": 6.53,
+      "win_rate_pct": 100.0,
+      "expectancy": 6.533
+    },
+    "stop_loss (gap)": {
+      "trades": 5,
+      "wins": 0,
+      "net_pnl": -103.48,
+      "win_rate_pct": 0.0,
+      "expectancy": -20.696
+    }
+  },
+  "by_session": {
+    "London": {
+      "trades": 96,
+      "wins": 28,
+      "net_pnl": -26.16,
+      "win_rate_pct": 29.2,
+      "expectancy": -0.272
+    },
+    "London/NY overlap": {
+      "trades": 33,
+      "wins": 8,
+      "net_pnl": -37.56,
+      "win_rate_pct": 24.2,
+      "expectancy": -1.138
+    },
+    "New York": {
+      "trades": 109,
+      "wins": 35,
+      "net_pnl": -92.73,
+      "win_rate_pct": 32.1,
+      "expectancy": -0.851
+    },
+    "Other": {
+      "trades": 56,
+      "wins": 19,
+      "net_pnl": 37.01,
+      "win_rate_pct": 33.9,
+      "expectancy": 0.661
+    },
+    "Asian": {
+      "trades": 166,
+      "wins": 57,
+      "net_pnl": 124.73,
+      "win_rate_pct": 34.3,
+      "expectancy": 0.751
+    }
+  },
+  "by_month": {
+    "2025-04": {
+      "trades": 83,
+      "wins": 25,
+      "net_pnl": -32.98,
+      "win_rate_pct": 30.1,
+      "expectancy": -0.397
+    },
+    "2025-05": {
+      "trades": 130,
+      "wins": 46,
+      "net_pnl": 165.67,
+      "win_rate_pct": 35.4,
+      "expectancy": 1.274
+    },
+    "2025-06": {
+      "trades": 104,
+      "wins": 33,
+      "net_pnl": 6.34,
+      "win_rate_pct": 31.7,
+      "expectancy": 0.061
+    },
+    "2025-07": {
+      "trades": 121,
+      "wins": 39,
+      "net_pnl": 7.25,
+      "win_rate_pct": 32.2,
+      "expectancy": 0.06
+    },
+    "2025-08": {
+      "trades": 22,
+      "wins": 4,
+      "net_pnl": -140.99,
+      "win_rate_pct": 18.2,
+      "expectancy": -6.408
+    }
+  },
+  "by_year": {
+    "2025": {
+      "trades": 460,
+      "wins": 147,
+      "net_pnl": 5.3,
+      "win_rate_pct": 32.0,
+      "expectancy": 0.012
+    }
+  },
+  "blocked_entries": {
+    "strength below minimum": 44990,
+    "position cap": 1674,
+    "event blackout": 489,
+    "loss-streak halt": 357,
+    "too close to weekly close": 70,
+    "sizing declined (below broker minimum)": 1,
+    "drawdown halt": 6885
+  },
+  "halts": {
+    "loss_streak": 30,
+    "drawdown": 1
+  },
+  "declined_trades": 1,
+  "bars": 99699,
+  "reconciles": true,
+  "notes": "live rules incl. sticky drawdown halt; costs: measured session spreads, real swap, unverified commission/slippage"
+}

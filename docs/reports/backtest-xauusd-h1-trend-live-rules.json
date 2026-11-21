@@ -1,0 +1,392 @@
+{
+  "period": {
+    "first_entry": "2009-10-05 16:00:00+00:00",
+    "last_exit": "2012-08-15 14:00:00+00:00"
+  },
+  "initial_balance": 10000.0,
+  "final_balance": 8509.8,
+  "net_profit": -1490.2,
+  "return_pct": -14.9,
+  "total_trades": 114,
+  "total_wins": 40,
+  "total_losses": 74,
+  "breakeven_trades": 0,
+  "win_rate_pct": 35.09,
+  "loss_rate_pct": 64.91,
+  "gross_profit": 2522.92,
+  "gross_loss": -4013.12,
+  "profit_factor": 0.629,
+  "expectancy_per_trade": -13.0719,
+  "expectancy_r": -0.1454,
+  "std_dev_per_trade": 70.9123,
+  "t_statistic": -1.968,
+  "average_win": 63.07,
+  "average_loss": -54.23,
+  "payoff_ratio": 1.163,
+  "maximum_win": {
+    "net_pnl": 244.2,
+    "direction": "BUY",
+    "lots": 0.11,
+    "entry_time": "2009-10-05 16:00:00+00:00",
+    "exit_time": "2009-10-07 14:00:00+00:00",
+    "exit_reason": "stop_loss"
+  },
+  "maximum_loss": {
+    "net_pnl": -106.37,
+    "direction": "SELL",
+    "lots": 0.06,
+    "entry_time": "2009-12-08 19:00:00+00:00",
+    "exit_time": "2009-12-09 13:00:00+00:00",
+    "exit_reason": "stop_loss"
+  },
+  "longest_winning_streak": 4,
+  "longest_losing_streak": 9,
+  "max_drawdown_money": 2072.35,
+  "max_drawdown_pct": 19.58,
+  "longest_drawdown_days": 986.3,
+  "average_holding_minutes": 1628.9,
+  "total_lots": 10.11,
+  "costs": {
+    "spread": 194.45,
+    "commission": 70.77,
+    "swap": 124.31,
+    "slippage": 54.71,
+    "total": 444.24,
+    "gross_pnl_before_commission_swap": -1295.12,
+    "costs_pct_of_gross": 34.3
+  },
+  "by_direction": {
+    "BUY": {
+      "trades": 59,
+      "wins": 27,
+      "net_pnl": 54.53,
+      "win_rate_pct": 45.8,
+      "expectancy": 0.924
+    },
+    "SELL": {
+      "trades": 55,
+      "wins": 13,
+      "net_pnl": -1544.74,
+      "win_rate_pct": 23.6,
+      "expectancy": -28.086
+    }
+  },
+  "by_exit_reason": {
+    "stop_loss": {
+      "trades": 95,
+      "wins": 30,
+      "net_pnl": -1707.59,
+      "win_rate_pct": 31.6,
+      "expectancy": -17.975
+    },
+    "stop_loss (gap)": {
+      "trades": 19,
+      "wins": 10,
+      "net_pnl": 217.39,
+      "win_rate_pct": 52.6,
+      "expectancy": 11.442
+    }
+  },
+  "by_session": {
+    "New York": {
+      "trades": 34,
+      "wins": 12,
+      "net_pnl": -216.98,
+      "win_rate_pct": 35.3,
+      "expectancy": -6.382
+    },
+    "London": {
+      "trades": 23,
+      "wins": 7,
+      "net_pnl": -276.5,
+      "win_rate_pct": 30.4,
+      "expectancy": -12.022
+    },
+    "Asian": {
+      "trades": 10,
+      "wins": 7,
+      "net_pnl": 242.1,
+      "win_rate_pct": 70.0,
+      "expectancy": 24.21
+    },
+    "London/NY overlap": {
+      "trades": 46,
+      "wins": 14,
+      "net_pnl": -1152.1,
+      "win_rate_pct": 30.4,
+      "expectancy": -25.046
+    },
+    "Other": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -86.72,
+      "win_rate_pct": 0.0,
+      "expectancy": -86.715
+    }
+  },
+  "by_month": {
+    "2009-10": {
+      "trades": 3,
+      "wins": 1,
+      "net_pnl": 170.28,
+      "win_rate_pct": 33.3,
+      "expectancy": 56.761
+    },
+    "2009-11": {
+      "trades": 5,
+      "wins": 4,
+      "net_pnl": 275.09,
+      "win_rate_pct": 80.0,
+      "expectancy": 55.017
+    },
+    "2009-12": {
+      "trades": 5,
+      "wins": 1,
+      "net_pnl": -140.18,
+      "win_rate_pct": 20.0,
+      "expectancy": -28.037
+    },
+    "2010-01": {
+      "trades": 4,
+      "wins": 1,
+      "net_pnl": -168.31,
+      "win_rate_pct": 25.0,
+      "expectancy": -42.077
+    },
+    "2010-02": {
+      "trades": 3,
+      "wins": 1,
+      "net_pnl": -15.93,
+      "win_rate_pct": 33.3,
+      "expectancy": -5.311
+    },
+    "2010-03": {
+      "trades": 2,
+      "wins": 1,
+      "net_pnl": -34.16,
+      "win_rate_pct": 50.0,
+      "expectancy": -17.079
+    },
+    "2010-04": {
+      "trades": 3,
+      "wins": 1,
+      "net_pnl": -120.95,
+      "win_rate_pct": 33.3,
+      "expectancy": -40.315
+    },
+    "2010-05": {
+      "trades": 5,
+      "wins": 2,
+      "net_pnl": -41.57,
+      "win_rate_pct": 40.0,
+      "expectancy": -8.314
+    },
+    "2010-06": {
+      "trades": 5,
+      "wins": 2,
+      "net_pnl": -64.39,
+      "win_rate_pct": 40.0,
+      "expectancy": -12.879
+    },
+    "2010-07": {
+      "trades": 4,
+      "wins": 1,
+      "net_pnl": -54.33,
+      "win_rate_pct": 25.0,
+      "expectancy": -13.583
+    },
+    "2010-08": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -95.17,
+      "win_rate_pct": 0.0,
+      "expectancy": -95.168
+    },
+    "2010-09": {
+      "trades": 5,
+      "wins": 2,
+      "net_pnl": -36.42,
+      "win_rate_pct": 40.0,
+      "expectancy": -7.284
+    },
+    "2010-10": {
+      "trades": 3,
+      "wins": 2,
+      "net_pnl": 27.7,
+      "win_rate_pct": 66.7,
+      "expectancy": 9.232
+    },
+    "2010-11": {
+      "trades": 3,
+      "wins": 0,
+      "net_pnl": -201.58,
+      "win_rate_pct": 0.0,
+      "expectancy": -67.192
+    },
+    "2011-01": {
+      "trades": 6,
+      "wins": 1,
+      "net_pnl": -149.1,
+      "win_rate_pct": 16.7,
+      "expectancy": -24.85
+    },
+    "2011-02": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -33.18,
+      "win_rate_pct": 0.0,
+      "expectancy": -33.181
+    },
+    "2011-03": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -95.39,
+      "win_rate_pct": 0.0,
+      "expectancy": -95.393
+    },
+    "2011-04": {
+      "trades": 2,
+      "wins": 1,
+      "net_pnl": 49.77,
+      "win_rate_pct": 50.0,
+      "expectancy": 24.886
+    },
+    "2011-05": {
+      "trades": 2,
+      "wins": 1,
+      "net_pnl": 41.79,
+      "win_rate_pct": 50.0,
+      "expectancy": 20.893
+    },
+    "2011-06": {
+      "trades": 8,
+      "wins": 0,
+      "net_pnl": -478.95,
+      "win_rate_pct": 0.0,
+      "expectancy": -59.869
+    },
+    "2011-07": {
+      "trades": 4,
+      "wins": 3,
+      "net_pnl": 172.72,
+      "win_rate_pct": 75.0,
+      "expectancy": 43.181
+    },
+    "2011-08": {
+      "trades": 3,
+      "wins": 3,
+      "net_pnl": 117.5,
+      "win_rate_pct": 100.0,
+      "expectancy": 39.167
+    },
+    "2011-12": {
+      "trades": 6,
+      "wins": 2,
+      "net_pnl": 117.31,
+      "win_rate_pct": 33.3,
+      "expectancy": 19.552
+    },
+    "2012-01": {
+      "trades": 2,
+      "wins": 2,
+      "net_pnl": 184.61,
+      "win_rate_pct": 100.0,
+      "expectancy": 92.304
+    },
+    "2012-02": {
+      "trades": 4,
+      "wins": 1,
+      "net_pnl": -155.08,
+      "win_rate_pct": 25.0,
+      "expectancy": -38.769
+    },
+    "2012-03": {
+      "trades": 6,
+      "wins": 2,
+      "net_pnl": -267.25,
+      "win_rate_pct": 33.3,
+      "expectancy": -44.542
+    },
+    "2012-04": {
+      "trades": 4,
+      "wins": 2,
+      "net_pnl": -53.02,
+      "win_rate_pct": 50.0,
+      "expectancy": -13.255
+    },
+    "2012-05": {
+      "trades": 6,
+      "wins": 2,
+      "net_pnl": -95.76,
+      "win_rate_pct": 33.3,
+      "expectancy": -15.96
+    },
+    "2012-06": {
+      "trades": 3,
+      "wins": 0,
+      "net_pnl": -97.8,
+      "win_rate_pct": 0.0,
+      "expectancy": -32.599
+    },
+    "2012-07": {
+      "trades": 4,
+      "wins": 1,
+      "net_pnl": -197.28,
+      "win_rate_pct": 25.0,
+      "expectancy": -49.319
+    },
+    "2012-08": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -51.17,
+      "win_rate_pct": 0.0,
+      "expectancy": -51.171
+    }
+  },
+  "by_year": {
+    "2009": {
+      "trades": 13,
+      "wins": 6,
+      "net_pnl": 305.18,
+      "win_rate_pct": 46.2,
+      "expectancy": 23.476
+    },
+    "2010": {
+      "trades": 38,
+      "wins": 13,
+      "net_pnl": -805.1,
+      "win_rate_pct": 34.2,
+      "expectancy": -21.187
+    },
+    "2011": {
+      "trades": 33,
+      "wins": 11,
+      "net_pnl": -257.53,
+      "win_rate_pct": 33.3,
+      "expectancy": -7.804
+    },
+    "2012": {
+      "trades": 30,
+      "wins": 10,
+      "net_pnl": -732.75,
+      "win_rate_pct": 33.3,
+      "expectancy": -24.425
+    }
+  },
+  "blocked_entries": {
+    "strength below minimum": 4211,
+    "event blackout": 87,
+    "position cap": 28,
+    "spread too wide": 36,
+    "loss-streak halt": 1,
+    "drawdown halt": 864
+  },
+  "halts": {
+    "loss_streak": 5,
+    "drawdown": 1
+  },
+  "declined_trades": 0,
+  "bars": 99399,
+  "reconciles": true,
+  "notes": "live rules incl. sticky drawdown halt; costs: measured session spreads, real swap, unverified commission/slippage"
+}

@@ -1,0 +1,70 @@
+XAUUSD H1 backtest -- live rules, realistic costs
+=================================================
+  Period                         2016-02-08 10:00:00+00:00 -> 2016-09-02 17:00:00+00:00
+  Initial / final balance        $10,000.00 -> $7,978.00
+  Net profit (return)            $-2,022.00 (-20.22%)
+  Total trades                   21
+  Wins / losses / breakeven      1 / 20 / 0
+  Win rate                       4.76%
+  Gross profit / gross loss      $266.45 / $-2,288.44
+  Profit factor                  0.116
+  Expectancy per trade           $-96.29 (-1.0718 R)
+  t-statistic of mean            -4.663
+  Average win / average loss     $266.45 / $-114.42
+  Payoff ratio                   2.329
+  Maximum win                    $266.45 BUY 7.1 lots, 2016-07-14 18:00:00+00:00 (stop_loss)
+  Maximum loss                   $-191.72 BUY 13.0 lots, 2016-03-28 13:00:00+00:00 (stop_loss)
+  Longest win / loss streak      1 / 16
+  Max drawdown                   $2,022.00 (20.22%), longest 206.8 days
+  Average holding time           1360.0 min
+  Total lots traded              166.5
+  Costs                          spread $57.77, commission $1,165.50, swap $0.29, slippage $6.76 = $1,230.32 (143.7% of gross)
+
+  By direction
+                                        trades    win %      net P&L  expectancy
+    SELL                                    11     0.0%   $-1,193.94    $-108.54
+    BUY                                     10    10.0%     $-828.05     $-82.81
+
+  By exit reason
+                                        trades    win %      net P&L  expectancy
+    stop_loss                               21     4.8%   $-2,022.00     $-96.29
+
+  By session
+                                        trades    win %      net P&L  expectancy
+    London                                   5     0.0%     $-578.47    $-115.69
+    New York                                 5     0.0%     $-482.85     $-96.57
+    London/NY overlap                        8    12.5%     $-682.38     $-85.30
+    Other                                    2     0.0%     $-236.01    $-118.00
+    Asian                                    1     0.0%      $-42.30     $-42.30
+
+  By year
+                                        trades    win %      net P&L  expectancy
+    2016                                    21     4.8%   $-2,022.00     $-96.29
+
+  By month
+                                        trades    win %      net P&L  expectancy
+    2016-02                                  2     0.0%     $-116.14     $-58.07
+    2016-03                                  2     0.0%     $-309.18    $-154.59
+    2016-04                                  1     0.0%      $-35.68     $-35.68
+    2016-05                                  4     0.0%     $-601.13    $-150.28
+    2016-06                                  6     0.0%     $-583.46     $-97.24
+    2016-07                                  2    50.0%      $170.25      $85.13
+    2016-08                                  3     0.0%     $-403.36    $-134.45
+    2016-09                                  1     0.0%     $-143.30    $-143.30
+
+  Blocked entries
+    strength below minimum                   3110
+    drawdown halt                            617
+    event blackout                           37
+    position cap                             5
+    loss-streak halt                         1
+
+  Halts
+    loss_streak                              3
+    drawdown                                 1
+
+  Declined trades                0
+
+  Bars                           62366
+
+  Notes                          live rules incl. sticky drawdown halt; costs: measured session spreads, real swap, unverified commission/slippage

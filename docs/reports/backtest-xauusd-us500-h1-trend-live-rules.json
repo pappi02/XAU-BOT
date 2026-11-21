@@ -1,0 +1,202 @@
+{
+  "period": {
+    "first_entry": "2016-02-08 10:00:00+00:00",
+    "last_exit": "2016-09-02 17:00:00+00:00"
+  },
+  "initial_balance": 10000.0,
+  "final_balance": 7978.0,
+  "net_profit": -2022.0,
+  "return_pct": -20.22,
+  "total_trades": 21,
+  "total_wins": 1,
+  "total_losses": 20,
+  "breakeven_trades": 0,
+  "win_rate_pct": 4.76,
+  "loss_rate_pct": 95.24,
+  "gross_profit": 266.45,
+  "gross_loss": -2288.44,
+  "profit_factor": 0.116,
+  "expectancy_per_trade": -96.2856,
+  "expectancy_r": -1.0718,
+  "std_dev_per_trade": 94.616,
+  "t_statistic": -4.663,
+  "average_win": 266.45,
+  "average_loss": -114.42,
+  "payoff_ratio": 2.329,
+  "maximum_win": {
+    "net_pnl": 266.45,
+    "direction": "BUY",
+    "lots": 7.1,
+    "entry_time": "2016-07-08 13:00:00+00:00",
+    "exit_time": "2016-07-14 18:00:00+00:00",
+    "exit_reason": "stop_loss"
+  },
+  "maximum_loss": {
+    "net_pnl": -191.72,
+    "direction": "BUY",
+    "lots": 13.0,
+    "entry_time": "2016-03-28 08:00:00+00:00",
+    "exit_time": "2016-03-28 13:00:00+00:00",
+    "exit_reason": "stop_loss"
+  },
+  "longest_winning_streak": 1,
+  "longest_losing_streak": 16,
+  "max_drawdown_money": 2022.0,
+  "max_drawdown_pct": 20.22,
+  "longest_drawdown_days": 206.8,
+  "average_holding_minutes": 1360.0,
+  "total_lots": 166.5,
+  "costs": {
+    "spread": 57.77,
+    "commission": 1165.5,
+    "swap": 0.29,
+    "slippage": 6.76,
+    "total": 1230.32,
+    "gross_pnl_before_commission_swap": -856.21,
+    "costs_pct_of_gross": 143.7
+  },
+  "by_direction": {
+    "SELL": {
+      "trades": 11,
+      "wins": 0,
+      "net_pnl": -1193.94,
+      "win_rate_pct": 0.0,
+      "expectancy": -108.54
+    },
+    "BUY": {
+      "trades": 10,
+      "wins": 1,
+      "net_pnl": -828.05,
+      "win_rate_pct": 10.0,
+      "expectancy": -82.805
+    }
+  },
+  "by_exit_reason": {
+    "stop_loss": {
+      "trades": 21,
+      "wins": 1,
+      "net_pnl": -2022.0,
+      "win_rate_pct": 4.8,
+      "expectancy": -96.286
+    }
+  },
+  "by_session": {
+    "London": {
+      "trades": 5,
+      "wins": 0,
+      "net_pnl": -578.47,
+      "win_rate_pct": 0.0,
+      "expectancy": -115.693
+    },
+    "New York": {
+      "trades": 5,
+      "wins": 0,
+      "net_pnl": -482.85,
+      "win_rate_pct": 0.0,
+      "expectancy": -96.569
+    },
+    "London/NY overlap": {
+      "trades": 8,
+      "wins": 1,
+      "net_pnl": -682.38,
+      "win_rate_pct": 12.5,
+      "expectancy": -85.298
+    },
+    "Other": {
+      "trades": 2,
+      "wins": 0,
+      "net_pnl": -236.01,
+      "win_rate_pct": 0.0,
+      "expectancy": -118.004
+    },
+    "Asian": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -42.3,
+      "win_rate_pct": 0.0,
+      "expectancy": -42.296
+    }
+  },
+  "by_month": {
+    "2016-02": {
+      "trades": 2,
+      "wins": 0,
+      "net_pnl": -116.14,
+      "win_rate_pct": 0.0,
+      "expectancy": -58.072
+    },
+    "2016-03": {
+      "trades": 2,
+      "wins": 0,
+      "net_pnl": -309.18,
+      "win_rate_pct": 0.0,
+      "expectancy": -154.592
+    },
+    "2016-04": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -35.68,
+      "win_rate_pct": 0.0,
+      "expectancy": -35.679
+    },
+    "2016-05": {
+      "trades": 4,
+      "wins": 0,
+      "net_pnl": -601.13,
+      "win_rate_pct": 0.0,
+      "expectancy": -150.283
+    },
+    "2016-06": {
+      "trades": 6,
+      "wins": 0,
+      "net_pnl": -583.46,
+      "win_rate_pct": 0.0,
+      "expectancy": -97.243
+    },
+    "2016-07": {
+      "trades": 2,
+      "wins": 1,
+      "net_pnl": 170.25,
+      "win_rate_pct": 50.0,
+      "expectancy": 85.126
+    },
+    "2016-08": {
+      "trades": 3,
+      "wins": 0,
+      "net_pnl": -403.36,
+      "win_rate_pct": 0.0,
+      "expectancy": -134.452
+    },
+    "2016-09": {
+      "trades": 1,
+      "wins": 0,
+      "net_pnl": -143.3,
+      "win_rate_pct": 0.0,
+      "expectancy": -143.301
+    }
+  },
+  "by_year": {
+    "2016": {
+      "trades": 21,
+      "wins": 1,
+      "net_pnl": -2022.0,
+      "win_rate_pct": 4.8,
+      "expectancy": -96.286
+    }
+  },
+  "blocked_entries": {
+    "strength below minimum": 3110,
+    "event blackout": 37,
+    "position cap": 5,
+    "loss-streak halt": 1,
+    "drawdown halt": 617
+  },
+  "halts": {
+    "loss_streak": 3,
+    "drawdown": 1
+  },
+  "declined_trades": 0,
+  "bars": 62366,
+  "reconciles": true,
+  "notes": "live rules incl. sticky drawdown halt; costs: measured session spreads, real swap, unverified commission/slippage"
+}

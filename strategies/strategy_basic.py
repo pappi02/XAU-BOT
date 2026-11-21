@@ -1,13 +1,18 @@
 # strategy_basic.py - Basic trading strategy combining multiple indicators
 
+import logging
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
 # Import indicators
-from indicators.ema import add_ema_signals, get_ema_trend
-from indicators.rsi import add_rsi_signals, get_rsi_condition
-from indicators.bollinger import add_bollinger_signals, get_bollinger_position
+from indicators.ema import add_ema_signals
+from indicators.rsi import add_rsi_signals
+from indicators.bollinger import add_bollinger_signals
+
+logger = logging.getLogger(__name__)
+
 
 class BasicTradingStrategy:
     """
@@ -56,11 +61,7 @@ class BasicTradingStrategy:
 
     def generate_signal(self, data):
         """
-<<<<<<< HEAD
         Generate trading signal based on combined indicators with enhanced scoring logic.
-=======
-        Generate trading signal based on combined indicators.
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
         Args:
             data (pd.DataFrame): OHLC data with indicators
@@ -84,7 +85,6 @@ class BasicTradingStrategy:
         # Get current values
         latest = data.iloc[-1]
 
-<<<<<<< HEAD
         # Get actual indicator values
         ema_fast_val = latest.get(f'EMA_{self.ema_fast}', latest['close'])
         ema_slow_val = latest.get(f'EMA_{self.ema_slow}', latest['close'])
@@ -115,128 +115,50 @@ class BasicTradingStrategy:
         elif bb_signal == -1:
             reasons.append("Price above upper Bollinger Band")
 
-        # --- Enhanced weighted scoring logic (more trade-oriented) ---
-        ema_weight = 0.45  # Increased for trend priority
-        rsi_weight = 0.30  # Reduced for balance
-        bb_weight = 0.25  # Reduced for stricter conditions
+        # --- Phase 9.3 (audit H-08): continuous, separable scoring ---
+        #
+        # The block that lived here produced exactly FOUR distinct strength
+        # values, {0, 20, 40, 100}, and six of the seven separately-tuned
+        # thresholds partitioned that set identically -- all of them meaning
+        # `strength == 100`. Worse, the three "independent" indicators were not:
+        # bb_signal was DEFINED as a conjunction with ema_signal, both bonus
+        # terms were EMA-gated, and enumerating RSI 0-100 against every
+        # reachable Bollinger state shows neither could change the signal.
+        # The decision was exactly the sign of (EMA_fast - EMA_slow).
+        #
+        # See strategies/signal_strength.py and docs/STRATEGY-HYPOTHESIS.md.
+        from strategies.signal_strength import compute_strength
 
-        buy_score = 0
-        sell_score = 0
+        atr_val = latest.get('ATR', latest.get(f'ATR_{getattr(self, "atr_period", 14)}'))
+        if atr_val is None or atr_val != atr_val:
+            # Fall back to a bar-range proxy rather than scoring against an
+            # unknown scale. compute_strength returns 0 for the EMA term when
+            # ATR is unusable, so this keeps the term meaningful.
+            atr_val = abs(float(latest.get('high', close)) - float(latest.get('low', close))) or None
 
-        # EMA scoring
-        if ema_signal == 1:
-            buy_score += ema_weight
-        elif ema_signal == -1:
-            sell_score += ema_weight
+        atr_history = None
+        if 'ATR' in data.columns:
+            atr_history = [v for v in data['ATR'].tail(300).tolist()
+                           if v is not None and v == v]
 
-        # RSI scoring (standardized thresholds)
-        if rsi_condition == "bullish":
-            buy_score += rsi_weight
-        elif rsi_condition == "bearish":
-            sell_score += rsi_weight
+        scored = compute_strength(
+            ema_fast=ema_fast_val, ema_slow=ema_slow_val, rsi=rsi_val,
+            close=close, bb_upper=upper, bb_lower=lower, atr=atr_val,
+            atr_history=atr_history,
+        )
+        signal = scored['signal']
+        strength = scored['strength']
 
-        # BB scoring (relaxed conditions)
-        if bb_signal == 1:
-            buy_score += bb_weight
-        elif bb_signal == -1:
-            sell_score += bb_weight
-
-        # --- Additional nuanced BUY conditions for more natural trading ---
-        # EMA bullish + RSI not overbought = potential BUY
-        if ema_signal == 1 and rsi_val <= 70:
-            buy_score += 0.1  # Small bonus for natural bullish setup
-
-        # EMA bearish + RSI not oversold = potential SELL
-        if ema_signal == -1 and rsi_val >= 30:
-            sell_score += 0.1  # Small bonus for natural bearish setup
-
-        # --- Final decision with reduced tolerance for more trades ---
-        tolerance = 0.02  # Reduced from 0.05 to allow more signals
-        total = buy_score + sell_score
-        strength = round(abs(buy_score - sell_score) / total * 100, 2) if total > 0 else 0
-
-        if abs(buy_score - sell_score) < tolerance:
-            signal = "HOLD"
-        elif buy_score > sell_score:
-            signal = "BUY"
-        else:
-            signal = "SELL"
-
-        # Get components for backward compatibility (updated for consistency)
+        # Components for logging/dashboard display (updated for consistency
+        # with the continuous score above).
         ema_signal = 1 if ema_fast_val > ema_slow_val else (-1 if ema_fast_val < ema_slow_val else 0)
         rsi_condition = 'overbought' if rsi_val > 70 else ('oversold' if rsi_val < 30 else 'neutral')
         bb_position = 'above_upper' if close >= upper else ('below_lower' if close <= lower else 'within_bands')
 
-        # Debug logging for signal analysis
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(
-            f"🧩 Signal Debug — EMA_fast={ema_fast_val:.2f}, EMA_slow={ema_slow_val:.2f}, RSI={rsi_val:.2f}, "
-            f"Buy_Score={buy_score}, Sell_Score={sell_score}, Signal={signal}, Strength={strength}%"
+            "🧩 Signal — EMA_fast=%.2f EMA_slow=%.2f RSI=%.2f score=%.4f -> %s %.1f%%",
+            ema_fast_val, ema_slow_val, rsi_val, scored['score'], signal, strength,
         )
-=======
-        # Initialize signal components
-        buy_signals = 0
-        sell_signals = 0
-        reasons = []
-
-        # EMA Analysis
-        ema_signal = latest.get('EMA_signal', 0)
-        ema_crossover = latest.get('EMA_crossover', 0)
-
-        if ema_signal == 1:
-            buy_signals += 1
-            reasons.append("EMA bullish")
-        elif ema_signal == -1:
-            sell_signals += 1
-            reasons.append("EMA bearish")
-
-        if ema_crossover == 1:
-            buy_signals += 1  # Additional weight for crossover
-            reasons.append("EMA bullish crossover")
-        elif ema_crossover == -1:
-            sell_signals += 1
-            reasons.append("EMA bearish crossover")
-
-        # RSI Analysis
-        rsi_signal = latest.get('RSI_signal', 0)
-        rsi_condition = get_rsi_condition(data, self.rsi_period)
-
-        if rsi_signal == 1:  # Oversold
-            buy_signals += 1
-            reasons.append("RSI oversold")
-        elif rsi_signal == -1:  # Overbought
-            sell_signals += 1
-            reasons.append("RSI overbought")
-
-        # Bollinger Bands Analysis
-        bb_signal = latest.get('BB_signal', 0)
-        bb_position = get_bollinger_position(data, self.bb_period, self.bb_std)
-
-        if bb_signal == 1:  # Price touched lower band
-            buy_signals += 1
-            reasons.append("Price at lower Bollinger Band")
-        elif bb_signal == -1:  # Price touched upper band
-            sell_signals += 1
-            reasons.append("Price at upper Bollinger Band")
-
-        # Maximum possible signals (3 indicators)
-        max_signals = 3
-
-        # Determine overall signal
-        total_buy = buy_signals
-        total_sell = sell_signals
-
-        if total_buy > total_sell:
-            signal = 'BUY'
-            strength = (total_buy / max_signals) * 100  # Strength as percentage
-        elif total_sell > total_buy:
-            signal = 'SELL'
-            strength = (total_sell / max_signals) * 100
-        else:
-            signal = 'HOLD'
-            strength = 0
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
         return {
             'signal': signal,
@@ -246,15 +168,7 @@ class BasicTradingStrategy:
                 'ema_signal': ema_signal,
                 'rsi_condition': rsi_condition,
                 'bb_position': bb_position
-<<<<<<< HEAD
             },
-            'scaling_factors': {
-                'trend_alignment': 1 if ema_signal == (1 if signal == 'BUY' else -1) else -1,
-                'momentum_strength': min(abs(ema_signal) * 0.5 + (1 if rsi_condition in ['bullish', 'bearish'] else 0) * 0.3 + (1 if bb_signal != 0 else 0) * 0.2, 1.0),
-                'volatility_adjustment': 1.0 / (1 + (self.bb_std / close) * 2) if self.bb_std > 0 else 1.0
-=======
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
-            }
         }
 
     def detect_trend_reversal(self, data):
@@ -267,13 +181,14 @@ class BasicTradingStrategy:
         Returns:
             dict: Reversal detection results
         """
+        no_reversal = {'reversal_detected': False, 'direction': None, 'strength': 0}
         if len(data) < 10:  # Need some history
-            return {'reversal_detected': False, 'direction': None, 'strength': 0}
+            return no_reversal
 
-        # Check for EMA crossover reversals
-        recent_ema_signals = data['EMA_signal'].tail(5).values
-        if len(recent_ema_signals) >= 3:
-            # Check if signal changed from bullish to bearish or vice versa
+        # Check for EMA crossover reversals. EMA_signal is the trend STATE
+        # (+1/-1/0), so a change between the last two bars is a crossover.
+        if 'EMA_signal' in data.columns:
+            recent_ema_signals = data['EMA_signal'].tail(2).values
             current_signal = recent_ema_signals[-1]
             prev_signal = recent_ema_signals[-2]
 
@@ -286,13 +201,14 @@ class BasicTradingStrategy:
                     'strength': min(reversal_strength, 100)
                 }
 
-        # Check for RSI extreme reversals
-        rsi_values = data['RSI_14'].tail(10)
-        if len(rsi_values) >= 5:
-            current_rsi = rsi_values.iloc[-1]
-            prev_rsi = rsi_values.iloc[-2]
+        # Check for RSI extreme reversals. Phase 12: the column was hardcoded
+        # as RSI_14 and raised KeyError for any other rsi_period.
+        rsi_column = f'RSI_{self.rsi_period}'
+        if rsi_column in data.columns:
+            current_rsi = data[rsi_column].iloc[-1]
+            prev_rsi = data[rsi_column].iloc[-2]
 
-            # RSI moving away from extreme levels
+            # RSI moving away from extreme levels (NaN compares False)
             if (prev_rsi < 30 and current_rsi > 35) or (prev_rsi > 70 and current_rsi < 65):
                 return {
                     'reversal_detected': True,
@@ -300,124 +216,11 @@ class BasicTradingStrategy:
                     'strength': 70
                 }
 
-        return {'reversal_detected': False, 'direction': None, 'strength': 0}
+        return no_reversal
 
-    def should_close_position(self, position_type, current_signal, signal_strength, reversal_info, news_sentiment, position_age):
-        """
-        Legacy method - now delegates to TradeExecutor.should_close_trade() for comprehensive auto-close logic.
+    # should_close_position() deleted in Phase 12 (dead code; see docs/SECURITY-DECISIONS.md).
 
-        This method is kept for backward compatibility but enhanced to use the new comprehensive logic.
-        For new implementations, use TradeExecutor.should_close_trade() directly.
-
-        Args:
-            position_type (str): 'BUY' or 'SELL'
-            current_signal (str): Current signal ('BUY', 'SELL', 'HOLD')
-            signal_strength (float): Current signal strength (0-100)
-            reversal_info (dict): Trend reversal detection results
-            news_sentiment (str): Current news sentiment
-            position_age (int): Position age in seconds
-
-        Returns:
-            dict: Close decision with reason
-        """
-        import config
-
-        # Emergency close conditions
-        if position_age > config.MAX_POSITION_AGE:
-            return {'should_close': True, 'reason': 'max_age_exceeded'}
-
-        # Signal reversal close
-        if config.TREND_REVERSAL_CLOSE and reversal_info['reversal_detected']:
-            if position_type == 'BUY' and reversal_info['direction'] == 'bullish_to_bearish':
-                return {'should_close': True, 'reason': 'trend_reversal_bearish'}
-            elif position_type == 'SELL' and reversal_info['direction'] == 'bearish_to_bullish':
-                return {'should_close': True, 'reason': 'trend_reversal_bullish'}
-
-        # Strong opposite signal
-        if signal_strength >= config.SIGNAL_REVERSAL_THRESHOLD:
-            if position_type == 'BUY' and current_signal == 'SELL':
-                return {'should_close': True, 'reason': 'strong_sell_signal'}
-            elif position_type == 'SELL' and current_signal == 'BUY':
-                return {'should_close': True, 'reason': 'strong_buy_signal'}
-
-        # News sentiment adverse to position
-        if config.NEWS_SENTIMENT_CLOSE:
-            if position_type == 'BUY' and news_sentiment == 'bearish':
-                return {'should_close': True, 'reason': 'adverse_news_sentiment'}
-            elif position_type == 'SELL' and news_sentiment == 'bullish':
-                return {'should_close': True, 'reason': 'adverse_news_sentiment'}
-
-        return {'should_close': False, 'reason': None}
-
-    def backtest(self, data, initial_balance=10000, position_size_pct=0.1):
-        """
-        Backtest the strategy on historical data.
-
-        Args:
-            data (pd.DataFrame): Historical OHLC data
-            initial_balance (float): Starting balance
-            position_size_pct (float): Position size as percentage of balance
-
-        Returns:
-            dict: Backtest results
-        """
-        df = self.prepare_data(data)
-        balance = initial_balance
-        position = 0  # 0 = no position, 1 = long, -1 = short
-        trades = []
-
-        for i in range(len(df)):
-            current_data = df.iloc[:i+1]
-            signal_info = self.generate_signal(current_data)
-
-            signal = signal_info['signal']
-            current_price = df.iloc[i]['close']
-
-            # Execute trades
-            if signal == 'buy' and position == 0:
-                # Enter long position
-                position_size = balance * position_size_pct
-                shares = position_size / current_price
-                position = 1
-                entry_price = current_price
-
-                trades.append({
-                    'type': 'buy',
-                    'price': current_price,
-                    'shares': shares,
-                    'timestamp': df.index[i]
-                })
-
-            elif signal == 'sell' and position == 1:
-                # Exit long position
-                exit_value = position * shares * current_price
-                pnl = exit_value - (shares * entry_price)
-                balance += pnl
-                position = 0
-
-                trades.append({
-                    'type': 'sell',
-                    'price': current_price,
-                    'shares': shares,
-                    'pnl': pnl,
-                    'timestamp': df.index[i]
-                })
-
-        # Calculate final balance if still in position
-        if position == 1:
-            final_value = shares * df.iloc[-1]['close']
-            pnl = final_value - (shares * entry_price)
-            balance += pnl
-
-        total_return = (balance - initial_balance) / initial_balance * 100
-
-        return {
-            'initial_balance': initial_balance,
-            'final_balance': balance,
-            'total_return_pct': total_return,
-            'total_trades': len(trades),
-            'trades': trades
-        }
+    # backtest() deleted in Phase 12 (dead code; see docs/SECURITY-DECISIONS.md).
 
 def create_strategy(strategy_type='basic', **kwargs):
     """
@@ -462,10 +265,6 @@ if __name__ == "__main__":
     print(f"\n📈 Current signal: {signal['signal']} (strength: {signal['strength']})")
     print(f"Reasons: {signal['reasons']}")
 
-    # Backtest
-    backtest_results = strategy.backtest(sample_data)
-    print("\n📊 Backtest Results:")
-    print(f"Initial Balance: ${backtest_results['initial_balance']:.2f}")
-    print(f"Final Balance: ${backtest_results['final_balance']:.2f}")
-    print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
-    print(f"Total Trades: {backtest_results['total_trades']}")
+    # Backtesting lives in backtest/engine.py (Phase 9.2). The method that used
+    # to be called here executed zero trades on any input (audit C-07).
+    print("\nFor a costed backtest see scripts/run_gate_c.py.")

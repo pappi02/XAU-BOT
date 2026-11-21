@@ -1,43 +1,52 @@
-<<<<<<< HEAD
 """
 Main entry point for XAU/USD Trading Bot Phase 5 (Adaptive + Scalable Version)
 """
 
-import logging
-import pandas as pd
-=======
-# Main entry point for XAU/USD Trading Bot Phase 3 - Real-Time Trading
-
-import logging
-import pandas as pd
-import matplotlib.pyplot as plt
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
+import json
+import os
+import sys
 import time
-from datetime import datetime
+
+import pandas as pd
 import MetaTrader5 as mt5
-from logger_config import setup_logger
 
 # Import project modules
 import config
-from config import *
-from data.connect_mt5 import connect_mt5, disconnect_mt5, get_mt5_info
-<<<<<<< HEAD
+from logger_config import setup_logger, DecisionLog
+from data.connect_mt5 import (connect_mt5, disconnect_mt5,
+                              AccountIdentityError, is_connected,
+                              reconnect_with_backoff)
 from data.fetch_candles import get_candles
+from data.symbol_resolver import resolve_symbol, SymbolNotAvailable
+from utils.config_validation import ConfigError, assert_valid
+from data.quality import (DataQualityError, required_warmup_bars,
+                          validate_for_trading)
 from strategies.strategy_basic import BasicTradingStrategy
-from utils.indicators import atr, dynamic_rr_ratio, dynamic_stop_loss
-from utils.news_reader import get_latest_forex_news
+from utils.indicators import atr
+from datetime import datetime, timezone
+from strategies.exit_rules import entry_too_close_to_weekly_close
+from strategies.trade_plan import (ATR_RATIO_WINDOW_BARS, news_blocks_entry,
+                                   plan_entry)
+from utils.news_reader import (get_latest_forex_news, sentiment_of,
+                               NewsRefresher)
+from utils.economic_calendar import EconomicCalendar
 from execution.trade_executor import TradeExecutor
+from execution.bar_gate import BarGate
+from execution.control import (CircuitBreaker, HealthReport,
+                               KillSwitch, ShutdownHandler,
+                               broker_snapshot, publish_candles)
 from risk.risk_manager import RiskManager
 from trade_logger import trade_logger
 
 # Set up logger
-logger = setup_logger(level=LOG_LEVEL)
+logger = setup_logger(level=config.LOG_LEVEL)
 
 # === Settings ===
-MAX_OPEN_TRADES = 12
-TRAILING_STOP_ENABLED = True
-SCALING_ENABLED = True
-AUTO_CLOSE_ENABLED = True
+# Phase 1.3 removed TRAILING_STOP_ENABLED, SCALING_ENABLED and
+# AUTO_CLOSE_ENABLED from here -- they silently overrode config.py (audit M-08).
+# Phase 4.1 removed the last one, MAX_OPEN_TRADES = 12, which disagreed with
+# config.MAX_CONCURRENT_POSITIONS = 100. Both now come from config, and both
+# are 1. config.py is the single source of truth for every setting.
 
 
 def adaptive_wait(last_atr, timeframe="M5"):
@@ -52,520 +61,323 @@ def adaptive_wait(last_atr, timeframe="M5"):
         return 45 if timeframe == "M1" else 60
 
 
-def manage_positions(executor, symbol, atr_value, signal_strength, trend_direction):
-    """Smart management: trailing, scaling, and adaptive SL updates."""
-    positions = mt5.positions_get(symbol=symbol)
-    if not positions:
-        return
+# manage_positions() lived here and is DELETED (Phase 5 follow-up).
+#
+# It was a SECOND trailing-stop implementation -- it built its own
+# TRADE_ACTION_SLTP request and called _send_order directly, in parallel with
+# TradeExecutor.manage_open_positions(). Nothing called it any more once Phase
+# 5.2 wired the executor's version into the loop, so it was dead code that
+# looked authoritative: exactly the shape of the duplicate-definition problems
+# the audit found (M-08). It also bypassed the Phase 2.3 order validation.
+#
+# Its scaling block is superseded by TradeExecutor's adaptive scaling.
+
+# The dead main_loop_legacy_gated() lived here. It was retained through Phases
+# 1-3 because it held the entry gates the live loop was missing. Phase 4.1 has
+# now ported those gates into main_loop() -- strength floor, position cap,
+# per-bar dedupe and the signal-reversal hold -- so the dead copy is deleted.
+# Its text survives in git history and in docs/phase4-entry-gating.md.
 
-    for pos in positions:
-        current_price = mt5.symbol_info_tick(symbol).bid if pos.type == mt5.POSITION_TYPE_SELL else mt5.symbol_info_tick(symbol).ask
-
-        # === Trailing Stop ===
-        if TRAILING_STOP_ENABLED and pos.profit > atr_value * 1.5 and signal_strength > 60:
-            new_sl = (
-                current_price - atr_value * 1.2 if pos.type == mt5.POSITION_TYPE_BUY else current_price + atr_value * 1.2
-            )
-            # Avoid invalid SL update
-            if (pos.type == mt5.POSITION_TYPE_BUY and new_sl > pos.sl) or (pos.type == mt5.POSITION_TYPE_SELL and new_sl < pos.sl):
-                req = {
-                    "action": mt5.TRADE_ACTION_SLTP,
-                    "position": pos.ticket,
-                    "symbol": symbol,
-                    "sl": round(new_sl, 2),
-                    "tp": pos.tp,
-                    "comment": "Adaptive trailing stop",
-                }
-                result = mt5.order_send(req)
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    logger.info(f"🔁 Trailing Stop updated for position {pos.ticket} → SL={new_sl:.2f} (strength={signal_strength:.1f}%)")
-                else:
-                    logger.warning(f"⚠️ Failed to update SL (retcode={result.retcode})")
-
-        # === Dynamic Scaling ===
-        open_positions = len(mt5.positions_get(symbol=symbol))
-        if SCALING_ENABLED and open_positions < MAX_OPEN_TRADES:
-            if signal_strength > 85 and trend_direction == pos.type:
-                scaled_volume = round(pos.volume * 1.25, 2)
-                sl = (
-                    current_price - atr_value * 2 if pos.type == mt5.POSITION_TYPE_BUY else current_price + atr_value * 2
-                )
-                tp = (
-                    current_price + atr_value * 4 if pos.type == mt5.POSITION_TYPE_BUY else current_price - atr_value * 4
-                )
-
-                logger.info(f"⚙️ Scaling in → vol={scaled_volume} | SL={sl:.2f} | TP={tp:.2f} (strength={signal_strength:.1f}%)")
-                try:
-                    executor.place_order(symbol, "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
-                                         volume=scaled_volume, sl=sl, tp=tp)
-                except Exception as ex:
-                    logger.error(f"❌ Error scaling position: {ex}")
-
-
-def main_loop():
-    """Main adaptive trading loop."""
-    logger.info("🔌 Initializing MetaTrader 5...")
-    if not mt5.initialize(path=config.MT5_PATH):
-        logger.error(f"❌ MT5 init failed: {mt5.last_error()}")
-        return
-    logger.info("✅ MT5 initialized")
-
-    if not connect_mt5(MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_TIMEOUT):
-        logger.error("❌ MT5 connection failed.")
-        return
-
-    risk_mgr = RiskManager(mt5, config)
-    executor = TradeExecutor(mt5, config, risk_mgr)
-    strategy = BasicTradingStrategy(ema_fast=EMA_FAST, ema_slow=EMA_SLOW, rsi_period=RSI_PERIOD,
-                                    bb_period=BB_PERIOD, bb_std=BB_STD_DEV)
-
-    last_signal = None
-
-    while True:
-        try:
-            # === Fetch data ===
-            timeframe_map = {
-                'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
-                'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4
-            }
-            mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), mt5.TIMEFRAME_M5)
-            df = get_candles(SYMBOL_PHASE5, mt5_timeframe, NUM_CANDLES)
-
-            if df is None or df.empty:
-                logger.warning("⚠️ Empty data, retrying in 30s...")
-                time.sleep(30)
-                continue
-
-            df = strategy.prepare_data(df)
-            atr_series = atr(df, period=ATR_PERIOD)
-            last_atr = float(atr_series.iloc[-1]) if not pd.isna(atr_series.iloc[-1]) else 2.5
-
-            signal_info = strategy.generate_signal(df)
-            signal, strength = signal_info['signal'], signal_info['strength']
-
-            logger.info(f"📈 Signal: {signal} | Strength={strength:.1f}% | ATR={last_atr:.2f}")
-
-            # === News Adjustment ===
-            news_data = get_latest_forex_news()
-            if news_data['available']:
-                sentiment = news_data['sentiment']
-                score = news_data['avg_sentiment_score']
-                logger.info(f"📰 News: {sentiment} ({score:.2f})")
-
-                if (sentiment == "bullish" and signal == "SELL") or (sentiment == "bearish" and signal == "BUY"):
-                    if score > 0.5:
-                        logger.info("📊 News bias triggered → Overriding signal to HOLD")
-                        signal = "HOLD"
-
-            # === Manage Open Positions ===
-            if AUTO_CLOSE_ENABLED:
-                manage_positions(executor, SYMBOL_PHASE5, last_atr, strength,
-                                 0 if signal == "HOLD" else (1 if signal == "BUY" else -1))
-
-            # === Trade Entry ===
-            open_positions = executor.get_open_positions(SYMBOL_PHASE5)
-            open_count = len(open_positions)
-
-            if signal in ["BUY", "SELL"] and strength >= 65 and open_count < MAX_OPEN_TRADES:
-                if signal != last_signal or open_count == 0:
-                    entry_price = df["close"].iloc[-1]
-                    trend_strength = signal_info["components"]["ema_signal"]
-                    rsi_condition = signal_info["components"]["rsi_condition"]
-
-                    dynamic_sl_multiplier = dynamic_stop_loss(
-                        signal_strength=strength, atr_value=last_atr,
-                        news_sentiment=news_data["sentiment"], trend_strength=trend_strength,
-                        rsi_condition=rsi_condition, position_type=signal
-                    )
-
-                    sl_distance = risk_mgr.calculate_dynamic_sl_distance(entry_price, last_atr, dynamic_sl_multiplier)
-                    dynamic_rr = dynamic_rr_ratio(
-                        signal_strength=strength, atr_value=last_atr, news_sentiment=news_data["sentiment"],
-                        trend_strength=trend_strength, rsi_condition=rsi_condition, position_type=signal
-                    )
-
-                    dynamic_lot = risk_mgr.calculate_dynamic_lot_size(
-                        stop_loss_distance=sl_distance, signal_strength=strength, atr_value=last_atr,
-                        session=risk_mgr.get_current_market_session(), recent_perf=risk_mgr.get_recent_performance(),
-                        news_impact=risk_mgr.get_news_impact_level(news_data["sentiment"]),
-                        trade_type="trend" if trend_strength > 0 else "reversal"
-                    )
-
-                    stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
-                    tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
-
-                    logger.info(f"📊 Executing {signal}: SL={stop_price:.2f}, TP={tp_price:.2f}, Vol={dynamic_lot:.2f}")
-                    try:
-                        res = executor.enter_trade(SYMBOL_PHASE5, signal, entry_price, stop_price, tp_price, volume=dynamic_lot)
-                        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                            logger.info(f"✅ Trade success [{signal}] | RR={dynamic_rr:.2f} | Lot={dynamic_lot}")
-                            last_signal = signal
-                        else:
-                            logger.warning(f"❌ Trade failed → {res.comment if res else 'No result'}")
-                    except Exception as ex:
-                        logger.error(f"❌ Execution error: {ex}")
-
-            # === Adaptive Sleep ===
-            sleep_time = adaptive_wait(last_atr, TIMEFRAME)
-            logger.info(f"⏸️ Sleeping {sleep_time}s (adaptive based on volatility)")
-            time.sleep(sleep_time)
-
-        except KeyboardInterrupt:
-            logger.info("🛑 Bot stopped manually.")
-            break
-        except Exception as e:
-            logger.exception(f"❌ Main loop error: {e}")
-            time.sleep(15)
-
-    disconnect_mt5()
-    logger.info("🔌 Disconnected from MT5. Bot stopped.")
-
-
-=======
-from data.fetch_live_data import get_live_ohlc
-from data.fetch_candles import get_candles
-from strategies.strategy_basic import BasicTradingStrategy
-from utils.plot_utils import plot_price_with_indicators, plot_backtest_results
-from utils.news_reader import get_latest_forex_news
-from execution.trade_executor import execute_trade, get_open_positions, close_position
-from risk.risk_manager import RiskManager
-from execution.trade_executor import TradeExecutor
-from utils.indicators import atr, dynamic_rr_ratio, dynamic_stop_loss
-from trade_logger import trade_logger
-
-# Set up logging
-logger = setup_logger(level=LOG_LEVEL)
-
-def run_real_time_bot():
-    """
-    Run the bot in real-time continuous trading mode.
-    """
-    print("🚀 XAU/USD Real-Time Auto Trading Bot Started...")
-
-    # Convert timeframe string to MT5 constant
-    timeframe_map = {
-        'M1': 1, 'M5': 5, 'M15': 15, 'M30': 30,
-        'H1': 16385, 'H4': 16388, 'D1': 16408,
-        'W1': 32769, 'MN': 49153
-    }
-    mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), 5)  # Default to M5
-
-    # Initialize strategy
-    strategy = BasicTradingStrategy(
-        ema_fast=EMA_FAST,
-        ema_slow=EMA_SLOW,
-        rsi_period=RSI_PERIOD,
-        bb_period=BB_PERIOD,
-        bb_std=BB_STD_DEV
-    )
-
-    # Track last signal to avoid duplicate trades
-    last_signal = None
-    trade_count = 0
-
-    while True:
-        try:
-            # Step 1: Get live data (fetch enough bars for indicators)
-            logger.info("Fetching live market data...")
-            df = get_live_ohlc(SYMBOL, mt5_timeframe, NUM_CANDLES)
-
-            if df is None or df.empty:
-                logger.warning("Failed to fetch live data, retrying in 30 seconds...")
-                time.sleep(30)
-                continue
-
-            logger.info(f"Fetched {len(df)} candles, latest price: ${df['close'].iloc[-1]:.2f}")
-
-            # Step 2: Calculate indicators
-            df_with_indicators = strategy.prepare_data(df)
-
-            # Step 3: Get news sentiment
-            news_sentiment = get_latest_forex_news()
-            logger.info(f"News sentiment: {news_sentiment}")
-
-            # Step 4: Generate trading signal
-            signal_info = strategy.generate_signal(df_with_indicators)
-
-            signal = signal_info['signal']
-            strength = signal_info['strength']
-
-            logger.info(f"Signal: {signal.upper()} (strength: {strength:.1f}%)")
-
-            # Step 5: Check for trade entry
-            if signal in ['BUY', 'SELL'] and strength >= 33:  # Minimum strength threshold (33% = 1 out of 3 indicators)
-                # Check if we have open positions
-                open_positions = get_open_positions(SYMBOL)
-
-                if not open_positions:
-                    # No open positions, can enter new trade
-                    if signal != last_signal:  # Avoid duplicate signals
-                        logger.info(f"Executing {signal.upper()} trade...")
-
-                        # Execute trade
-                        success = execute_trade(
-                            symbol=SYMBOL,
-                            signal=signal.upper(),
-                            volume=TRADE_AMOUNT / (df['close'].iloc[-1] * 100000)  # Convert USD to lots
-                        )
-
-                        if success:
-                            last_signal = signal
-                            trade_count += 1
-                            logger.info(f"Trade #{trade_count} executed successfully")
-                        else:
-                            logger.error("Trade execution failed")
-                else:
-                    logger.info(f"Open position exists ({len(open_positions)}), skipping new trade")
-
-            # Step 6: Wait before next cycle (check every minute for M1 timeframe)
-            wait_time = 60 if TIMEFRAME == 'M1' else 300  # 1 min for M1, 5 min for others
-            logger.info(f"Waiting {wait_time} seconds until next analysis...")
-            time.sleep(wait_time)
-
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
-            break
-        except Exception as e:
-            logger.error(f"Error in main loop: {e}")
-            time.sleep(30)  # Wait before retrying
-
-    # Cleanup
-    disconnect_mt5()
-    logger.info("Bot shutdown complete")
-
-def run_analysis_mode():
-    """
-    Run the bot in analysis mode (original functionality).
-    """
-    print("📊 XAU/USD Trading Bot Analysis Mode")
-
-    try:
-        # Step 1: Connect to MT5
-        logger.info("Connecting to MetaTrader 5...")
-        if not connect_mt5(MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_TIMEOUT):
-            logger.error("Failed to connect to MT5. Exiting...")
-            return
-
-        # Get MT5 info
-        mt5_info = get_mt5_info()
-        if mt5_info:
-            logger.info(f"Connected to MT5 terminal: {mt5_info['terminal']['name']}")
-            if mt5_info['account']:
-                logger.info(f"Account: {mt5_info['account']['login']}, Balance: ${mt5_info['account']['balance']:.2f}")
-
-        # Step 2: Fetch historical data
-        logger.info(f"Fetching {NUM_CANDLES} candles for {SYMBOL} on {TIMEFRAME} timeframe...")
-        try:
-            # Convert timeframe string to MT5 constant
-            timeframe_map = {
-                'M1': 1, 'M5': 5, 'M15': 15, 'M30': 30,
-                'H1': 16385, 'H4': 16388, 'D1': 16408,
-                'W1': 32769, 'MN': 49153
-            }
-            mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), 5)  # Default to M5
-
-            candles = get_candles(SYMBOL, mt5_timeframe, NUM_CANDLES)
-            if candles.empty:
-                logger.error("No data fetched. Exiting...")
-                return
-
-            logger.info(f"Successfully fetched {len(candles)} candles")
-            print(f"📊 Data range: {candles.index[0]} to {candles.index[-1]}")
-            print(f"📊 Latest close price: ${candles['close'].iloc[-1]:.2f}")
-
-        except Exception as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            return
-
-        # Step 3: Initialize trading strategy
-        logger.info("Initializing trading strategy...")
-        strategy = BasicTradingStrategy(
-            ema_fast=EMA_FAST,
-            ema_slow=EMA_SLOW,
-            rsi_period=RSI_PERIOD,
-            bb_period=BB_PERIOD,
-            bb_std=BB_STD_DEV
-        )
-
-        # Step 4: Prepare data with indicators
-        logger.info("Preparing data with technical indicators...")
-        data_with_indicators = strategy.prepare_data(candles)
-        logger.info("Indicators calculated successfully")
-
-        # Step 5: Generate current trading signal
-        logger.info("Generating trading signal...")
-        signal = strategy.generate_signal(data_with_indicators)
-
-        print("\n" + "="*50)
-        print("📈 CURRENT TRADING SIGNAL")
-        print("="*50)
-        print(f"Signal: {signal['signal'].upper()}")
-        print(f"Strength: {signal['strength']:.1f}%")
-        print(f"Reasons: {', '.join(signal['reasons'])}")
-        print(f"Components: EMA={signal['components']['ema_signal']}, RSI={signal['components']['rsi_condition']}, BB={signal['components']['bb_position']}")
-        print("="*50)
-
-        # Step 6: Plot price chart with indicators
-        logger.info("Generating price chart with indicators...")
-        try:
-            plot_title = f"XAU/USD {TIMEFRAME} Chart with Technical Indicators"
-            plot_price_with_indicators(data_with_indicators.tail(100), title=plot_title)
-            logger.info("Chart plotted successfully")
-        except Exception as e:
-            logger.error(f"Error plotting chart: {str(e)}")
-
-        # Step 7: Optional - Run backtest
-        run_backtest = input("\n🔍 Run backtest on historical data? (y/n): ").lower().strip()
-        if run_backtest == 'y':
-            logger.info("Running backtest...")
-            try:
-                backtest_results = strategy.backtest(candles, INITIAL_BALANCE, POSITION_SIZE_PCT)
-
-                print("\n" + "="*50)
-                print("📊 BACKTEST RESULTS")
-                print("="*50)
-                print(f"Initial Balance: ${backtest_results['initial_balance']:.2f}")
-                print(f"Final Balance: ${backtest_results['final_balance']:.2f}")
-                print(f"Total Return: {backtest_results['total_return_pct']:.2f}%")
-                print(f"Total Trades: {backtest_results['total_trades']}")
-                print("="*50)
-
-                # Plot backtest results
-                plot_backtest_results(backtest_results)
-                logger.info("Backtest completed and plotted")
-
-            except Exception as e:
-                logger.error(f"Error running backtest: {str(e)}")
-
-        # Step 8: Cleanup
-        disconnect_mt5()
-        logger.info("MT5 connection closed")
-
-        print("\n✅ XAU/USD Trading Bot Analysis completed successfully!")
-
-    except KeyboardInterrupt:
-        logger.info("Bot interrupted by user")
-        disconnect_mt5()
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        disconnect_mt5()
 
 def main_loop():
     """
     Phase 5 Enhanced Bot — includes full connection and safety checks
     """
 
-    # --- Step 1: Ensure MetaTrader 5 is initialized properly ---
-    logger.info("🔌 Initializing MetaTrader 5...")
-    if not mt5.initialize(path=config.MT5_PATH):
-        logger.error("❌ MT5 initialization failed: %s", mt5.last_error())
+    # --- Step 1: Connect to the account, failing closed ---
+    # Phase 1.6 (H-06): this used to be `if MT5_ACCOUNT and MT5_PASSWORD and
+    # MT5_SERVER:` -- so a missing credential skipped the login entirely and the
+    # bot traded whatever account the terminal already had open. connect_mt5
+    # now raises AccountIdentityError on a missing credential, and refuses a
+    # live account unless ALLOW_LIVE=true. It also performs the initialize().
+    logger.info("🔐 Connecting to MT5...")
+    if not connect_mt5(config.MT5_ACCOUNT, config.MT5_PASSWORD,
+                       config.MT5_SERVER, config.MT5_TIMEOUT_MS):
+        logger.error("❌ Failed to connect to MT5 account. Exiting Phase 5.")
         return
-    logger.info("✅ MT5 initialized successfully")
+    logger.info("✅ Connected to MT5 account")
 
-    # --- Step 2: Connect to account ---
-    if MT5_ACCOUNT and MT5_PASSWORD and MT5_SERVER:
-        logger.info("🔐 Connecting to MT5 account...")
-        if not connect_mt5(MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_TIMEOUT):
-            logger.error("❌ Failed to connect to MT5 account. Exiting Phase 5.")
-            return
-        logger.info("✅ Connected to MT5 account")
-
-    # --- Step 3: Ensure symbol is available and visible ---
-    symbol_info = mt5.symbol_info(SYMBOL_PHASE5)
-    if symbol_info is None:
-        logger.error(f"⚠️ Symbol '{SYMBOL_PHASE5}' not found. Check Market Watch or broker symbol name.")
+    # --- Step 3: Confirm the symbol is tradeable on THIS account ---
+    #
+    # config.SYMBOL was 'XAUUSDm' against a broker that lists 'XAUUSD', so the
+    # bot exited here on every start with no hint what the right name was.
+    # resolve_symbol lists the broker's gold-like symbols when it fails.
+    try:
+        resolve_symbol(mt5, config.SYMBOL)
+    except SymbolNotAvailable as exc:
+        logger.error("%s", exc)
         disconnect_mt5()
         return
-
-    if not symbol_info.visible:
-        logger.info(f"📈 Symbol '{SYMBOL_PHASE5}' not visible — attempting to add it to Market Watch...")
-        if not mt5.symbol_select(SYMBOL_PHASE5, True):
-            logger.error(f"❌ Failed to add symbol '{SYMBOL_PHASE5}' to Market Watch.")
-            disconnect_mt5()
-            return
-        logger.info(f"✅ Symbol '{SYMBOL_PHASE5}' added to Market Watch successfully.")
 
     # --- Step 4: Instantiate managers and strategy ---
     risk_mgr = RiskManager(mt5, config)
     executor = TradeExecutor(mt5, config, risk_mgr)
+
+    # MT5 stamps everything in broker server time. A wrong offset silently
+    # breaks position age, feed staleness and the weekend close, so a
+    # measurable mismatch refuses to start.
+    clock_status, clock_message = executor.clock.verify(mt5, config.SYMBOL_PHASE5)
+    if clock_status == "mismatch":
+        logger.error("%s", clock_message)
+        disconnect_mt5()
+        return
+    logger.info("Clock: %s", clock_message)
     strategy = BasicTradingStrategy(
-        ema_fast=EMA_FAST,
-        ema_slow=EMA_SLOW,
-        rsi_period=RSI_PERIOD,
-        bb_period=BB_PERIOD,
-        bb_std=BB_STD_DEV
+        ema_fast=config.EMA_FAST,
+        ema_slow=config.EMA_SLOW,
+        rsi_period=config.RSI_PERIOD,
+        bb_period=config.BB_PERIOD,
+        bb_std=config.BB_STD_DEV
     )
 
     logger.info("🚀 Phase 5 Bot initialized and running...")
 
+    # Phase 8: observability and control.
+    decisions = DecisionLog()
+    breaker = CircuitBreaker(
+        threshold=getattr(config, "CIRCUIT_BREAKER_THRESHOLD", 5))
+    kill_switch = KillSwitch()
+    health = HealthReport()
+    shutdown = ShutdownHandler().install()
+
+    # Phase 10 (H-05): a real economic calendar. There was none at all, so the
+    # bot traded straight into CPI, NFP and FOMC.
+    calendar = None
+    if getattr(config, "ECONOMIC_CALENDAR_ENABLED", False):
+        calendar = EconomicCalendar(config.ECONOMIC_CALENDAR_PATH)
+        upcoming = calendar.next_event()
+        if upcoming:
+            logger.info("Next high-impact event: %s at %s",
+                        upcoming.name, upcoming.when)
+
+    # Phase 10: fetch news OFF the trading thread. Even with a timeout, up to
+    # 8 seconds of the loop could be spent waiting on a socket -- during which
+    # no position is managed and no stop is checked.
+    news_refresher = NewsRefresher().start()
+
+    # Phase 4.2: one decision per closed bar, and one entry per bar.
+    bar_gate = BarGate(config.TIMEFRAME)
+    logger.info("Bar gate armed for %s (%d second bars)",
+                config.TIMEFRAME, bar_gate.bar_seconds)
+
+    # Checked once, as soon as enough ATR history exists (Step 7, below).
+    volatility_regime_checked = False
+
     try:
         while True:
             try:
+                # --- Step 4a: Control checks (Phase 8.2 / 8.3) ---
+                if shutdown.should_stop:
+                    logger.info("Shutdown requested -- leaving the loop.")
+                    break
+
+                if breaker.is_tripped:
+                    logger.critical("Circuit breaker is tripped. Not trading. "
+                                    "Investigate, then restart.")
+                    # BUG FIX: this wrote kill_switch=True whenever the
+                    # BREAKER was tripped, reporting the wrong control as
+                    # engaged. Report each control's real state.
+                    health.update(connected=is_connected(),
+                                  circuit_breaker=breaker.status(),
+                                  kill_switch=kill_switch.is_engaged())
+                    time.sleep(60)
+                    continue
+
+                # --- Step 4b: Verify the terminal is still there (Phase 6.4) ---
+                #
+                # Without this, a dropped connection makes every query return
+                # None, which the old code read as "no positions" -- so the bot
+                # would keep trading against an account it could not see.
+                if not is_connected():
+                    logger.error("MT5 terminal disconnected. Halting trading "
+                                 "and attempting to reconnect.")
+                    if not reconnect_with_backoff(config.MT5_ACCOUNT,
+                                                  config.MT5_PASSWORD,
+                                                  config.MT5_SERVER,
+                                                  config.MT5_TIMEOUT_MS):
+                        logger.error("Reconnect failed. Not trading; will retry.")
+                        time.sleep(60)
+                        continue
+                    logger.info("Reconnected; resuming.")
+
+                # --- Step 4c: Record realised P&L from the broker (Phase 7.2) ---
+                #
+                # H-07: the audited bot recorded only its OWN closes, using the
+                # floating P&L read before the close order was sent. Trades
+                # closed by a server-side stop were never recorded at all --
+                # and stop-outs are the loss-heavy tail, so the win rate was
+                # biased upward BY CONSTRUCTION. This polls the broker's own
+                # deal history, which includes every close however it happened.
+                try:
+                    recorded = executor.sync_broker_deals()
+                    if recorded:
+                        logger.info("Recorded %d closing deal(s) from the broker.",
+                                    recorded)
+                except Exception as ex:
+                    logger.exception("Deal sync failed: %s", ex)
+
                 # --- Step 5: Fetch historical data safely ---
                 timeframe_map = {
                     'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
                     'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4, 'D1': mt5.TIMEFRAME_D1,
                     'W1': mt5.TIMEFRAME_W1, 'MN': mt5.TIMEFRAME_MN1
                 }
-                mt5_timeframe = timeframe_map.get(TIMEFRAME.upper(), mt5.TIMEFRAME_M5)
+                mt5_timeframe = timeframe_map.get(config.TIMEFRAME.upper(), mt5.TIMEFRAME_M5)
 
-                df = get_candles(SYMBOL_PHASE5, mt5_timeframe, NUM_CANDLES)
+                df = get_candles(config.SYMBOL_PHASE5, mt5_timeframe, config.NUM_CANDLES,
+                                 clock=executor.clock)
                 if df is None or df.empty:
                     logger.warning("⚠️ No data fetched or empty dataframe — retrying in 30 seconds...")
                     time.sleep(30)
                     continue
 
-                logger.info(f"📊 {len(df)} candles fetched | Latest price: ${df['close'].iloc[-1]:.2f}")
+                # get_candles drops the still-forming bar, so this is the
+                # newest CLOSED bar -- the one every decision keys on.
+                bar_time = df.index[-1]
+                logger.info("%d closed candles | bar %s | last close $%.2f",
+                            len(df), bar_time, df['close'].iloc[-1])
+
+                # --- Step 5b: Validate the data before trusting it (Phase 9.1) ---
+                #
+                # H-09: with too few bars the indicators come back NaN, the
+                # strategy returns HOLD, and a data outage becomes
+                # indistinguishable from a quiet market. "I cannot decide" must
+                # be a different answer from "I decide to do nothing".
+                warmup = required_warmup_bars(config.EMA_SLOW, config.RSI_PERIOD,
+                                              config.BB_PERIOD, config.ATR_PERIOD)
+                try:
+                    quality = validate_for_trading(df, bar_gate.bar_seconds,
+                                                   min_bars=warmup)
+                except DataQualityError as exc:
+                    logger.error("Data unusable -- NOT signalling: %s", exc)
+                    decisions.record(action="none", entry_blocked="data quality",
+                                     detail=str(exc))
+                    breaker.record_failure(exc)
+                    time.sleep(30)
+                    continue
+
+                # Phase 12.1: publish closed bars for the dashboard, so it
+                # never opens its own MT5 connection to draw a chart.
+                publish_candles(df)
+
+                if quality["intraday_gaps"]:
+                    logger.warning("%d intraday gap(s) in the series.",
+                                   quality["intraday_gaps"])
 
                 # --- Step 6: Apply indicators ---
                 df = strategy.prepare_data(df)
 
+                # The indicator columns must exist under their CONFIGURED names
+                # (audit M-10): reading 'RSI_14' literally raised KeyError on
+                # every iteration once RSI_PERIOD changed.
+                try:
+                    validate_for_trading(
+                        df, bar_gate.bar_seconds,
+                        required_columns=['RSI_%d' % config.RSI_PERIOD,
+                                          'EMA_%d' % config.EMA_FAST,
+                                          'EMA_%d' % config.EMA_SLOW],
+                        check_staleness=False)
+                except DataQualityError as exc:
+                    logger.error("Indicators unusable -- NOT signalling: %s", exc)
+                    breaker.record_failure(exc)
+                    time.sleep(30)
+                    continue
+
                 # --- Step 7: Compute ATR for SL ---
-                atr_series = atr(df, period=ATR_PERIOD)
+                atr_series = atr(df, period=config.ATR_PERIOD)
                 last_atr = float(atr_series.iloc[-1]) if len(atr_series) > 0 and not pd.isna(atr_series.iloc[-1]) else None
+                # generate_signal scores volatility from the 'ATR' column. It
+                # was never added here, so the live bot scored against a
+                # one-bar high-low proxy while the backtest used real ATR:
+                # identical bars, different strengths.
+                df['ATR'] = atr_series
+
+                # Phase 12 follow-up: this assertion existed but was never
+                # called from anywhere -- exactly the class of bug (M-03,
+                # absolute thresholds unreachable against the real ATR
+                # distribution) it was written to catch, uncaught because
+                # nothing ran it. Checked once, as soon as there is enough
+                # history to judge, and logged rather than fatal: a flat/stale
+                # ATR distribution is a data problem the loop's other checks
+                # already treat as recoverable, not a reason to stop the bot.
+                if not volatility_regime_checked:
+                    atr_history = [v for v in atr_series.tail(300).tolist()
+                                   if v is not None and v == v]
+                    if len(atr_history) >= 30:
+                        from risk.volatility import VolatilityRegime
+                        try:
+                            VolatilityRegime(20.0, 80.0).assert_thresholds_are_reachable(atr_history)
+                        except ValueError as exc:
+                            logger.error("Volatility regime check: %s", exc)
+                        volatility_regime_checked = True
 
                 # --- Step 8: Generate signal ---
                 signal_info = strategy.generate_signal(df)
                 signal = signal_info['signal']
                 strength = signal_info['strength']
 
-                logger.info("📈 Signal: %s | RSI: %.2f | Strength: %.1f%%", signal, df['RSI_14'].iloc[-1], strength)
+                # Phase 9.1 (audit M-10): this read df['RSI_14'] literally.
+                # Changing RSI_PERIOD raised KeyError on every iteration, which
+                # the loop swallowed and retried forever -- a config knob that
+                # bricked the bot. The column name follows the config now.
+                rsi_column = 'RSI_%d' % config.RSI_PERIOD
+                rsi_now = df[rsi_column].iloc[-1] if rsi_column in df.columns else float('nan')
+                logger.info("Signal: %s | %s: %.2f | Strength: %.1f%%",
+                            signal, rsi_column, rsi_now, strength)
 
                 # --- Step 9: News sentiment bias ---
-                news_sentiment = get_latest_forex_news()
+                # Cached; the refresher thread does the fetching.
+                news_sentiment = NewsRefresher.current()
                 logger.info("📰 News sentiment: %s", news_sentiment)
 
-                if news_sentiment == "bullish" and signal == "SELL":
+                # Headline sentiment vetoes an opposing entry only when
+                # NEWS_SENTIMENT_TRADING_ENABLED (default off): it cannot be
+                # reproduced historically, so it cannot be backtested.
+                if news_blocks_entry(signal, news_sentiment, config):
+                    logger.info("📊 News bias: %s vetoed by %s sentiment",
+                                signal, sentiment_of(news_sentiment))
                     signal = "HOLD"
-                    logger.info("📊 News bias: overriding SELL to HOLD due to bullish sentiment")
-                elif news_sentiment == "bearish" and signal == "BUY":
-                    signal = "HOLD"
-                    logger.info("📊 News bias: overriding BUY to HOLD due to bearish sentiment")
+
+                # --- Step 9b: Move stops on open positions (Phase 5.2) ---
+                #
+                # This is the step the audited bot never had. Trailing used to
+                # live inside should_close_trade(), where a trail trigger meant
+                # "close at market". Here it MODIFIES the stop and never closes.
+                if config.TRAILING_STOP_ENABLED or config.BREAK_EVEN_ENABLED:
+                    try:
+                        moved = executor.manage_open_positions(
+                            config.SYMBOL_PHASE5,
+                            atr=last_atr,
+                            trend_strength=signal_info['components']['ema_signal'],
+                            news_sentiment=news_sentiment,
+                        )
+                        if moved:
+                            logger.info("Moved %d stop(s).", moved)
+                    except Exception as ex:
+                        logger.exception("Error managing stops: %s", ex)
+                    # A stop that could not be moved after retries is a
+                    # failure the operator must see, not a log line.
+                    while executor.stop_failures:
+                        breaker.record_failure("stop not moved: %s"
+                                               % executor.stop_failures.pop(0))
 
     # --- Step 10: Position monitoring and auto-close ---
                 if config.AUTO_CLOSE_ENABLED:
-                    open_positions = get_open_positions(SYMBOL_PHASE5)
+                    # BUG FIX: this called a bare `get_open_positions`, which is
+                    # not imported anywhere in this module -- NameError on the
+                    # first iteration with AUTO_CLOSE_ENABLED. Every other call
+                    # site in this file uses executor.get_open_positions().
+                    open_positions = executor.get_open_positions(config.SYMBOL_PHASE5)
                     if open_positions:
                         logger.info(f"📊 Monitoring {len(open_positions)} open positions for auto-close conditions")
 
                         for pos in open_positions:
                             position_type = 'BUY' if pos.type == mt5.POSITION_TYPE_BUY else 'SELL'
-                            position_age = int(time.time() - pos.time)
 
-                            # Skip if position is too young
-                            if position_age < config.MIN_HOLDING_TIME:
-                                continue
-
-                            # Get current market conditions
-                            current_signal_info = strategy.generate_signal(df)
-                            current_signal = current_signal_info['signal']
-                            signal_strength = current_signal_info['strength']
-
-                            # Detect trend reversals
-                            reversal_info = strategy.detect_trend_reversal(df)
 
                             # Get news sentiment
-                            news_sentiment = get_latest_forex_news()
+                            # Cached; the refresher thread does the fetching.
+                            news_sentiment = NewsRefresher.current()
 
                             # Check if position should be closed using comprehensive auto-close logic
                             close_decision = executor.should_close_trade(
@@ -574,7 +386,9 @@ def main_loop():
                                 strategy=strategy,
                                 news_sentiment=news_sentiment,
                                 atr_value=last_atr,
-                                entry_atr=None  # Would need to track this at entry
+                                # entry_atr comes from the executor's own
+                                # per-ticket record (Phase 5.7).
+                                entry_atr=None
                             )
 
                             if close_decision['should_close']:
@@ -598,161 +412,320 @@ def main_loop():
                                 except Exception as ex:
                                     logger.exception(f"❌ Error auto-closing position {pos.ticket}: {ex}")
 
-                    # Emergency close all positions if account health is critical
+                    # Emergency close if account health is critical.
+                    #
+                    # BUG FIX: this read config.INITIAL_ACCOUNT_BALANCE, which
+                    # Phase 3.4 DELETED -- so it raised AttributeError on every
+                    # iteration, and the bare `except` swallowed it. The
+                    # emergency close could therefore never fire. That is the
+                    # same fail-open shape as audit L-04: a risk control that
+                    # reports "nothing wrong" for every error.
+                    #
+                    # It also repeated L-04's original defect -- measuring
+                    # drawdown against a hardcoded starting balance. It now uses
+                    # the persisted equity high-water mark, like every other
+                    # drawdown check.
                     try:
                         account = risk_mgr.refresh_account()
-                        initial_balance = config.INITIAL_ACCOUNT_BALANCE  # Use configurable initial balance
-                        current_balance = float(account.balance)
-                        balance_drop_pct = (initial_balance - current_balance) / initial_balance
+                        equity = risk_mgr.account_equity(account)
+                        drawdown = risk_mgr.state.drawdown_fraction(equity)
 
-                        if balance_drop_pct >= config.EMERGENCY_CLOSE_THRESHOLD:
-                            logger.warning(f"🚨 EMERGENCY: Account balance dropped by {balance_drop_pct:.1%}, closing all positions")
-                            executor.close_all_positions(SYMBOL_PHASE5)
+                        if drawdown >= config.EMERGENCY_CLOSE_DRAWDOWN_FRACTION:
+                            logger.warning(
+                                "EMERGENCY: equity %.2f is %.1f%% below its peak "
+                                "of %.2f -- closing all positions.",
+                                equity, drawdown * 100,
+                                risk_mgr.state.equity_high_water_mark or 0.0)
+                            executor.close_all_positions(config.SYMBOL_PHASE5)
+                            risk_mgr.state.halt(
+                                "emergency drawdown close at %.1f%%" % (drawdown * 100))
                     except Exception as ex:
-                        logger.exception(f"❌ Error checking emergency close conditions: {ex}")
+                        # Fail CLOSED: if we cannot assess account health we do
+                        # not keep trading as though it were fine.
+                        logger.exception("Emergency-close check FAILED: %s", ex)
+                        raise
 
                 # --- Step 11: Trade execution ---
-                if signal in ("BUY", "SELL"):
+                #
+                # Phase 4.1 (audit C-02). The live loop previously had NO entry
+                # gating at all: `if signal in ("BUY","SELL")` then sleep(60).
+                # The only brake was MAX_CONCURRENT_POSITIONS = 100 inside
+                # enter_trade. These four gates are ported from the dead
+                # main_loop_legacy_gated() and run_bot.py's trading_bot()
+                # (docs/phase4-entry-gating.md), with the reversal hold's unit
+                # bug fixed -- it counts bars now, not hardcoded 300s ticks.
+
+                # Gate 0: signal-reversal hold. May replace `signal` with the
+                # previously held one.
+                signal = bar_gate.apply_reversal_hold(
+                    signal, strength, bar_time,
+                    config.SIGNAL_REVERSAL_MIN_STRENGTH,
+                    config.MIN_SIGNAL_HOLD_BARS,
+                )
+
+                # One position query per iteration, reused by the cap gate and
+                # the decision record below.
+                open_positions_now = executor.get_open_positions(config.SYMBOL_PHASE5)
+
+                entry_blocked = None
+                # Gate -1: the kill switch. Stops NEW positions; existing ones
+                # are left alone, because pausing and liquidating are different
+                # decisions (Phase 8.3).
+                if kill_switch.is_engaged():
+                    entry_blocked = "kill switch engaged"
+                # Gate -0.5: scheduled macro event. Risk avoidance, not signal:
+                # gold reprices violently on CPI/NFP/FOMC and stops slip.
+                elif calendar is not None and calendar.is_blackout(
+                        before_minutes=config.EVENT_BLACKOUT_BEFORE_MINUTES,
+                        after_minutes=config.EVENT_BLACKOUT_AFTER_MINUTES)[0]:
+                    entry_blocked = "event blackout: %s" % calendar.is_blackout(
+                        before_minutes=config.EVENT_BLACKOUT_BEFORE_MINUTES,
+                        after_minutes=config.EVENT_BLACKOUT_AFTER_MINUTES)[1]
+                elif signal not in ("BUY", "SELL"):
+                    entry_blocked = "signal is %s" % signal
+                # Gate 1: strength floor.
+                elif strength < config.MIN_ENTRY_STRENGTH:
+                    entry_blocked = ("strength %.1f%% < %.1f%% minimum"
+                                     % (strength, config.MIN_ENTRY_STRENGTH))
+                # Gate 2: position cap, checked in the LOOP, not only in
+                # enter_trade.
+                elif len(open_positions_now) >= config.MAX_OPEN_TRADES:
+                    entry_blocked = ("already at the %d position cap"
+                                     % config.MAX_OPEN_TRADES)
+                # Gate 3: one entry per closed bar.
+                elif not bar_gate.may_enter(bar_time):
+                    entry_blocked = "already entered on bar %s" % bar_time
+                # Gate 3b: no entry that could not be flattened before the
+                # weekend (the minimum hold would block the weekend close).
+                elif entry_too_close_to_weekly_close(
+                        datetime.now(timezone.utc), config, bar_gate.bar_seconds):
+                    entry_blocked = "too close to the weekly close"
+                # Gate 4: a stop needs a usable ATR (plan_entry returns None).
+                elif last_atr is None or not last_atr > 0:
+                    entry_blocked = "ATR unusable -- cannot size a stop"
+
+                if entry_blocked:
+                    logger.info("No entry: %s", entry_blocked)
+                else:
                     entry_price = df['close'].iloc[-1]
 
-                    # Calculate dynamic stop loss multiplier
-                    trend_strength = signal_info['components']['ema_signal']  # -1, 0, 1
-                    rsi_condition = signal_info['components']['rsi_condition']  # 'oversold', 'overbought', 'neutral'
-
-                    # Calculate ADX if available (placeholder - would need ADX indicator)
-                    adx_value = None  # TODO: Implement ADX calculation
-
-                    # Volume factor (placeholder - would need volume data)
-                    volume_factor = 1.0  # TODO: Implement volume/liquidity assessment
-
-                    dynamic_sl_multiplier = dynamic_stop_loss(
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        news_sentiment=news_sentiment,
-                        trend_strength=trend_strength,
-                        rsi_condition=rsi_condition,
-                        position_type=signal,
-                        adx_value=adx_value,
-                        volume_factor=volume_factor
-                    )
-
-                    # Calculate SL distance using dynamic multiplier
-                    sl_distance = risk_mgr.calculate_dynamic_sl_distance(entry_price, last_atr, dynamic_sl_multiplier)
-
-                    # Calculate dynamic risk-reward ratio
-                    dynamic_rr = dynamic_rr_ratio(
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        news_sentiment=news_sentiment,
-                        trend_strength=trend_strength,
-                        rsi_condition=rsi_condition,
-                        position_type=signal
-                    )
-
-                    # Calculate dynamic lot size
-                    session = risk_mgr.get_current_market_session()
-                    recent_perf = risk_mgr.get_recent_performance()
-                    news_impact = risk_mgr.get_news_impact_level(news_sentiment)
-                    trade_type = "trend" if trend_strength > 0 else "reversal"  # Simplified trade type detection
-
+                    # Stop and target: one implementation, shared with the
+                    # backtester (strategies/trade_plan.py).
+                    plan = plan_entry(signal_info, last_atr,
+                                      atr_series.tail(ATR_RATIO_WINDOW_BARS).tolist(),
+                                      news_sentiment, config)
+                    sl_distance = plan.sl_distance
+                    dynamic_rr = plan.rr
                     dynamic_lot_size = risk_mgr.calculate_dynamic_lot_size(
-                        stop_loss_distance=sl_distance,
-                        signal_strength=strength,
-                        atr_value=last_atr,
-                        session=session,
-                        recent_perf=recent_perf,
-                        news_impact=news_impact,
-                        trade_type=trade_type
-                    )
+                        stop_loss_distance=sl_distance)
+                    session = risk_mgr.get_current_market_session()
+                    stop_price, tp_price = plan.levels(signal, entry_price)
 
-                    logger.info(f"📊 Dynamic calculations: Signal={strength:.1f}%, ATR={last_atr:.2f}, News={news_sentiment}, Trend={trend_strength}, RSI={rsi_condition}, Session={session} → SL_Multiplier={dynamic_sl_multiplier}, RR={dynamic_rr}, Lot_Size={dynamic_lot_size}")
-
-                    stop_price = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
-                    tp_price = entry_price + (sl_distance * dynamic_rr) if signal == "BUY" else entry_price - (sl_distance * dynamic_rr)
+                    logger.info("📊 Plan: strength=%.1f%% ATR=%.2f session=%s -> "
+                                "SL x%.2f (%.2f) RR %.2f lots %s",
+                                strength, last_atr, session, plan.sl_multiplier,
+                                sl_distance, dynamic_rr, dynamic_lot_size)
 
                     try:
-                        res = executor.enter_trade(SYMBOL_PHASE5, signal, entry_price, stop_price, tp_price, volume=dynamic_lot_size)
-                        logger.info(f"✅ Trade placed: {signal} | SL={stop_price:.2f} | TP={tp_price:.2f} | RR={dynamic_rr} | SL_Distance={sl_distance:.2f} | Lot_Size={dynamic_lot_size} | Result={res}")
+                        res = executor.enter_trade(
+                            config.SYMBOL_PHASE5, signal, entry_price,
+                            stop_price, tp_price, volume=dynamic_lot_size,
+                            # Phase 5.7: record ATR at entry so the
+                            # volatility-spike exit can actually fire.
+                            entry_atr=last_atr)
+                        # Phase 4.2: claim this bar so a re-evaluation of the
+                        # same closed bar cannot open a second position.
+                        bar_gate.record_entry(bar_time)
+                        logger.info(f"✅ Trade placed on bar {bar_time}: {signal} | SL={stop_price:.2f} | TP={tp_price:.2f} | RR={dynamic_rr} | SL_Distance={sl_distance:.2f} | Lot_Size={dynamic_lot_size} | Result={res}")
                     except Exception as ex:
-                        logger.exception("❌ Failed to enter trade: %s", ex)
+                        # A refusal from the risk layer is an expected outcome,
+                        # not a crash: log it and wait for the next bar.
+                        logger.warning("Entry not taken: %s", ex)
 
-                # --- Step 11: Pause before next analysis ---
-                time.sleep(60)
+                # --- Step 11b: Record the decision (Phase 8.1) ---
+                #
+                # One structured record per iteration: every input and every
+                # gate. This is what makes "why did it not trade?" answerable
+                # without re-reading thousands of lines of prose.
+                try:
+                    spec = executor.get_symbol_spec(config.SYMBOL_PHASE5)
+                    spread_points = spec.spread_points(mt5)
+                except Exception:
+                    spread_points = None
+
+                decisions.record(
+                    bar=str(bar_time),
+                    symbol=config.SYMBOL_PHASE5,
+                    signal=signal,
+                    strength=round(float(strength), 2),
+                    atr=round(float(last_atr), 4) if last_atr else None,
+                    spread_points=round(spread_points, 1) if spread_points else None,
+                    session=risk_mgr.get_current_market_session(),
+                    news=news_sentiment.get("sentiment")
+                         if isinstance(news_sentiment, dict) else news_sentiment,
+                    open_positions=len(open_positions_now),
+                    entry_blocked=entry_blocked,
+                    action="entry" if not entry_blocked else "none",
+                    min_entry_strength=config.MIN_ENTRY_STRENGTH,
+                    max_open_trades=config.MAX_OPEN_TRADES,
+                )
+
+                # Phase 12.1: the loop is the only MT5 client. It publishes
+                # account, positions and the last tick here; the read API and
+                # dashboard read this file instead of opening their own
+                # connections to the same terminal.
+                health.update(
+                    connected=True,
+                    open_positions=len(open_positions_now),
+                    daily_pnl=risk_mgr.daily_pnl,
+                    circuit_breaker=breaker.status(),
+                    kill_switch=kill_switch.is_engaged(),
+                    halted_reason=risk_mgr.state.halted_reason,
+                    **broker_snapshot(mt5, config.SYMBOL, open_positions_now),
+                )
+                breaker.record_success()
+
+                # --- Step 12: Wait for the next bar to close ---
+                #
+                # Phase 4.2: was a fixed sleep(60), which on an M5 timeframe
+                # re-evaluated the same bar about five times. There is no new
+                # information until a bar closes, so wait for exactly that.
+                wait = bar_gate.seconds_until_next_bar(time.time())
+                logger.info("Sleeping %.0fs until the next %s bar closes.",
+                            wait, config.TIMEFRAME)
+                time.sleep(wait)
 
             except Exception as e:
+                # Phase 8.2: count it. The audited loop swallowed every
+                # exception and slept, so a broker rejecting every order
+                # produced an indefinite silent outage that looked healthy.
                 logger.exception("Error in main loop: %s", e)
+                breaker.record_failure(e)
+                health.update(circuit_breaker=breaker.status())
                 time.sleep(5)
 
     finally:
         disconnect_mt5()
         logger.info("🔌 MT5 disconnected and bot stopped.")
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
 
 
-def main():
+def flatten():
+    """Close every position and exit (Phase 8.3, `--flatten`).
+
+    Deliberately separate from the kill switch. Stopping new entries and
+    liquidating everything are different decisions, and a system whose only
+    pause button is "close everything" will be used to close everything when a
+    pause was what was wanted.
     """
-<<<<<<< HEAD
-    Main entry point - directly runs the Phase 5 Enhanced Bot.
+    logger.warning("FLATTEN requested: closing all positions for %s.",
+                   config.SYMBOL_PHASE5)
+
+    if not connect_mt5(config.MT5_ACCOUNT, config.MT5_PASSWORD,
+                       config.MT5_SERVER, config.MT5_TIMEOUT_MS):
+        raise SystemExit("Could not connect to MT5 -- nothing was closed.")
+
+    try:
+        risk_mgr = RiskManager(mt5, config)
+        executor = TradeExecutor(mt5, config, risk_mgr)
+
+        before = executor.get_open_positions(config.SYMBOL_PHASE5)
+        logger.warning("%d position(s) open.", len(before))
+        if not before:
+            return 0
+
+        closed = executor.close_all_positions(config.SYMBOL_PHASE5)
+        after = executor.get_open_positions(config.SYMBOL_PHASE5)
+        logger.warning("Closed %s position(s); %d still open.", closed, len(after))
+
+        if after:
+            logger.error("NOT FLAT: %d position(s) remain. Close them in the "
+                         "terminal.", len(after))
+            return 1
+
+        executor.sync_broker_deals()
+        return 0
+    finally:
+        disconnect_mt5()
+
+
+def main(argv=None):
+    """Entry point. Supports --flatten and --health.
+
+    --health reads a file and NEVER connects to a broker.
     """
-    print("🤖 XAU/USD Trading Bot")
+    argv = sys.argv[1:] if argv is None else argv
+
+    if "--health" in argv:
+        report = HealthReport().read()
+        print(json.dumps(report, indent=2) if report
+              else "No health report yet -- the bot has not run.")
+        return 0
+
+    if "--flatten" in argv:
+        return flatten()
+
+    if "--record-review" in argv:
+        # Phase 13: live trading requires a daily manual review.
+        from execution.rollout import record_daily_review
+        reviewer = os.getenv("USERNAME") or os.getenv("USER") or "operator"
+        record_daily_review(reviewer)
+        print("Daily review recorded by %s." % reviewer)
+        return 0
+
+    if "--clear-halt" in argv:
+        # Offline: a drawdown or daily-loss halt persists in the risk state
+        # file across restarts. Clearing it is a deliberate human act.
+        from risk.risk_state import RiskState
+        state = RiskState()
+        reason = state.halted_reason
+        if not reason:
+            print("No halt is set.")
+            return 0
+        state.clear_halt()
+        print("Cleared halt: %s. Entries may resume on the next start." % reason)
+        return 0
+
+    if "--ack-loss-streak" in argv:
+        # Offline: reads and writes the local trade database only.
+        from execution.position_state import PositionStateStore
+        store = PositionStateStore()
+        streak = store.consecutive_losses()
+        newest = store.acknowledge_loss_streak()
+        print("Acknowledged a streak of %d losing trade(s) through deal %s. "
+              "Entries may resume." % (streak, newest))
+        return 0
+
+    print("XAU/USD Trading Bot")
     print("=" * 40)
-    print("🚀 Starting Gold Scalper Enhanced Bot with Risk Management")
-    print("⚠️  WARNING: This will execute actual trades with advanced risk controls!")
-    print("Make sure you're using a DEMO account for testing.")
+    print("Starting Gold Scalper with risk management.")
+    print("WARNING: this executes real trades on the configured account.")
+    print("Kill switch:  create a file named STOP in the project root")
+    print("Flatten:      python main.py --flatten")
+    print("Health:       python main.py --health")
+    print("Loss streak:  python main.py --ack-loss-streak")
+    print("Risk halt:    python main.py --clear-halt")
+    print("Daily review: python main.py --record-review")
     print("=" * 40)
 
-    # Run the enhanced bot directly
-    main_loop()
+    # Phase 12.4: validate configuration BEFORE touching the broker. Every
+    # problem is reported at once, so one run shows everything to fix.
+    try:
+        assert_valid(config)
+    except ConfigError as exc:
+        raise SystemExit("\n%s" % exc)
+
+    try:
+        main_loop()
+    except AccountIdentityError as exc:
+        # Phase 1.6: fail closed, and say why in one line rather than a
+        # traceback. This is the expected outcome of an unconfigured .env.
+        raise SystemExit("\n%s" % exc)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted. Positions are left as they are -- use "
+                       "--flatten to close them.")
+        return 130
+    return 0
+
 
 if __name__ == "__main__":
-    main()
-=======
-    Main entry point - choose between real-time trading, analysis mode, or Phase 5 enhanced bot.
-    """
-    print("🤖 XAU/USD Trading Bot")
-    print("=" * 30)
-
-    mode = input("Choose mode:\n1. Real-time Auto Trading (24/7) - Legacy\n2. Analysis Mode (backtest/plots)\n3. Phase 5 Enhanced Bot (recommended)\nEnter 1, 2, or 3: ").strip()
-
-    if mode == '1':
-        # Connect to MT5 first
-        if not connect_mt5(MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_TIMEOUT):
-            logger.error("Failed to connect to MT5. Cannot start real-time trading.")
-            return
-
-        # Get MT5 info
-        mt5_info = get_mt5_info()
-        if mt5_info:
-            logger.info(f"Connected to MT5 terminal: {mt5_info['terminal']['name']}")
-            if mt5_info['account']:
-                logger.info(f"Account: {mt5_info['account']['login']}, Balance: ${mt5_info['account']['balance']:.2f}")
-
-        print("\n⚠️  WARNING: Real-time trading mode will execute actual trades!")
-        print("Make sure you're using a DEMO account for testing.")
-        confirm = input("Continue? (yes/no): ").lower().strip()
-
-        if confirm in ['yes', 'y']:
-            run_real_time_bot()
-        else:
-            print("Real-time trading cancelled.")
-            disconnect_mt5()
-
-    elif mode == '2':
-        run_analysis_mode()
-    elif mode == '3':
-        print("\n🚀 Starting Phase 5 Enhanced Bot with Risk Management")
-        print("⚠️  WARNING: This will execute actual trades with advanced risk controls!")
-        print("Make sure you're using a DEMO account for testing.")
-        confirm = input("Continue? (yes/no): ").lower().strip()
-
-        if confirm in ['yes', 'y']:
-            # Run the enhanced bot directly
-            main_loop()
-        else:
-            print("Phase 5 bot cancelled.")
-    else:
-        print("Invalid choice. Exiting.")
-
-if __name__ == "__main__":
-    main()
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
+    sys.exit(main())

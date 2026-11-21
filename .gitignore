@@ -6,21 +6,20 @@ __pycache__/
 
 # Virtual environments
 venv*/
-.env/
-venv*/
-venv312/
+env/
+.venv/
+ENV/
 
 # Jupyter
 .ipynb_checkpoints
 
-# Byte-compiled / optimized / DLL files
-*.pyc
-
 # SQLite DB
 trades.db
 
-# pytest
+# pytest / coverage
 .pytest_cache/
+.coverage
+htmlcov/
 
 # IDEs
 .vscode/
@@ -29,8 +28,9 @@ trades.db
 # Streamlit
 .streamlit/
 
-# Environment variables
+# Environment variables (.env.example IS tracked)
 .env
+.env.local
 
 # Logs
 *.log
@@ -38,9 +38,16 @@ trades.db
 # OS files
 .DS_Store
 Thumbs.db
-<<<<<<< HEAD
 
-
-TODO.md
-=======
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
+# Audit report (generated, not source)
+XAU-BOT-AUDIT.html
+XAU-BOT-AUDIT.doc
+fix.md
+risk_state.json
+logs/
+STOP
+data/historical/
+# SQLite WAL side files (Phase 12)
+trades.db-*
+*.db-wal
+*.db-shm

@@ -3,9 +3,10 @@
 import pandas as pd
 import numpy as np
 
+
 def calculate_rsi(data, period=14, column='close'):
     """
-    Calculate Relative Strength Index (RSI).
+    Calculate Relative Strength Index (RSI), Wilder's original smoothing.
 
     Args:
         data (pd.DataFrame): OHLC data
@@ -14,109 +15,57 @@ def calculate_rsi(data, period=14, column='close'):
 
     Returns:
         pd.Series: RSI values (0-100)
+
+    Phase 12 follow-up: this used a plain rolling mean for the average
+    gain/loss. That is a real, documented RSI variant, but it is not what
+    Wilder defined and not what MT5's own iRSI (or any other platform's
+    default RSI) computes -- so the bot's RSI disagreed with the number on the
+    broker's own chart, and the 30/70 thresholds (tuned by decades of
+    convention against Wilder's smoothing) were being applied to a
+    differently-shaped series. Wilder's smoothing is an EMA with alpha =
+    1/period, which pandas' ``ewm(alpha=..., adjust=False)`` computes exactly.
     """
     if column not in data.columns:
         raise ValueError(f"Column '{column}' not found in data")
 
-    # Calculate price changes
     delta = data[column].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
 
-    # Separate gains and losses
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
-    # Calculate RS and RSI
-    rs = gain / loss
+    rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
+    # avg_loss == 0 with avg_gain > 0 divides to +inf -> rsi = 100, correct
+    # (Python/pandas handle this without raising). avg_loss == avg_gain == 0
+    # (a totally flat window) gives 0/0 = NaN, left as NaN rather than guessed.
 
     return rsi
 
-def add_rsi_signals(data, period=14, overbought=70, oversold=30, column='close'):
+
+def add_rsi_signals(data, period=14, column='close'):
     """
-    Add RSI signals to data.
+    Add RSI to the frame.
 
     Args:
         data (pd.DataFrame): OHLC data
         period (int): RSI period
-        overbought (int): Overbought threshold
-        oversold (int): Oversold threshold
         column (str): Column to calculate RSI on
 
     Returns:
-        pd.DataFrame: Data with RSI signals added
+        pd.DataFrame: Data with an ``RSI_{period}`` column added.
+
+    Phase 12 follow-up: this used to also smooth the RSI column with a
+    further 3-bar moving average on top of Wilder's own smoothing --
+    unexplained extra lag, never separately justified or tested, removed.
+    It also computed RSI_signal/RSI_crossover columns that no caller ever
+    read (dead weight recomputed on every bar of every backtest).
     """
     df = data.copy()
-
-    # Calculate RSI
-<<<<<<< HEAD
-    df[f'RSI_{period}'] = calculate_rsi(df, period, column).rolling(3).mean()
-=======
     df[f'RSI_{period}'] = calculate_rsi(df, period, column)
->>>>>>> 9583572fd6e97d7118f47920d27800694c8ec614
-
-    # Generate signals
-    df['RSI_signal'] = 0
-    df.loc[df[f'RSI_{period}'] < oversold, 'RSI_signal'] = 1   # Oversold (buy signal)
-    df.loc[df[f'RSI_{period}'] > overbought, 'RSI_signal'] = -1  # Overbought (sell signal)
-
-    # Detect crossovers
-    df['RSI_crossover'] = 0
-    df.loc[(df[f'RSI_{period}'].shift(1) <= oversold) & (df[f'RSI_{period}'] > oversold), 'RSI_crossover'] = 1   # Bullish crossover
-    df.loc[(df[f'RSI_{period}'].shift(1) >= overbought) & (df[f'RSI_{period}'] < overbought), 'RSI_crossover'] = -1  # Bearish crossover
-
     return df
 
-def get_rsi_condition(data, period=14, column='close'):
-    """
-    Get RSI condition description.
-
-    Args:
-        data (pd.DataFrame): OHLC data
-        period (int): RSI period
-        column (str): Column to calculate RSI on
-
-    Returns:
-        str: RSI condition ('overbought', 'oversold', 'neutral')
-    """
-    rsi = calculate_rsi(data, period, column).iloc[-1]
-
-    if rsi >= 70:
-        return 'overbought'
-    elif rsi <= 30:
-        return 'oversold'
-    else:
-        return 'neutral'
-
-def rsi_divergence(data, period=14, column='close'):
-    """
-    Detect RSI divergence (basic implementation).
-
-    Args:
-        data (pd.DataFrame): OHLC data
-        period (int): RSI period
-        column (str): Column to calculate RSI on
-
-    Returns:
-        str: Divergence type ('bullish', 'bearish', 'none')
-    """
-    if len(data) < period * 2:
-        return 'none'
-
-    # Get recent data
-    recent_data = data.tail(period * 2)
-    prices = recent_data[column]
-    rsi_values = calculate_rsi(recent_data, period, column)
-
-    # Simple divergence detection (price vs RSI)
-    price_trend = 'up' if prices.iloc[-1] > prices.iloc[0] else 'down'
-    rsi_trend = 'up' if rsi_values.iloc[-1] > rsi_values.iloc[0] else 'down'
-
-    if price_trend == 'down' and rsi_trend == 'up':
-        return 'bullish'  # Price falling, RSI rising = potential reversal up
-    elif price_trend == 'up' and rsi_trend == 'down':
-        return 'bearish'  # Price rising, RSI falling = potential reversal down
-    else:
-        return 'none'
 
 if __name__ == "__main__":
     # Example usage
@@ -132,15 +81,6 @@ if __name__ == "__main__":
     print("📊 RSI(14) calculated:")
     print(rsi.tail())
 
-    # Add signals
     data_with_signals = add_rsi_signals(sample_data)
-    print("\n📈 Data with RSI signals:")
-    print(data_with_signals[['close', 'RSI_14', 'RSI_signal', 'RSI_crossover']].tail())
-
-    # Get condition
-    condition = get_rsi_condition(sample_data)
-    print(f"\n📊 Current RSI condition: {condition}")
-
-    # Check divergence
-    divergence = rsi_divergence(sample_data)
-    print(f"📊 RSI divergence: {divergence}")
+    print("\n📈 Data with RSI:")
+    print(data_with_signals[['close', 'RSI_14']].tail())

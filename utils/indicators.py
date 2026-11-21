@@ -3,8 +3,15 @@ import numpy as np
 
 def atr(df, period=14):
     """
-    Average True Range (ATR)
+    Average True Range (ATR), Wilder's original smoothing.
     df: DataFrame must contain 'high','low','close'
+
+    Phase 12 follow-up: this used a plain rolling mean of true range. That is
+    a real ATR variant, but not what Wilder defined and not what MT5's own
+    iATR (or most reference implementations) compute by default -- so the
+    bot's ATR, which every stop distance and volatility-ratio calculation
+    depends on, disagreed with the number on the broker's own chart. Wilder's
+    smoothing is an EMA with alpha = 1/period (``ewm(alpha=..., adjust=False)``).
     """
     high = df['high']
     low = df['low']
@@ -13,17 +20,18 @@ def atr(df, period=14):
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period).mean()
+    atr = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
     return atr
 
-def dynamic_rr_ratio(signal_strength, atr_value, news_sentiment, trend_strength, rsi_condition, position_type):
+def dynamic_rr_ratio(signal_strength, atr_ratio, news_sentiment, trend_strength, rsi_condition, position_type):
     """
     Calculate dynamic risk-reward ratio based on multiple market factors.
 
     Args:
         signal_strength (float): Signal strength percentage (0-100)
-        atr_value (float): Current ATR value for volatility assessment
-        news_sentiment (str): News sentiment ('bullish', 'bearish', 'neutral')
+        atr_ratio (float): current ATR / its recent median (see
+            strategies/trade_plan.atr_ratio). 1.0 = normal volatility.
+        news_sentiment: dict or str ('bullish', 'bearish', 'neutral')
         trend_strength (int): Trend strength from EMA (-1=bearish, 0=neutral, 1=bullish)
         rsi_condition (str): RSI condition ('oversold', 'overbought', 'neutral')
         position_type (str): Position type ('BUY' or 'SELL')
@@ -37,15 +45,22 @@ def dynamic_rr_ratio(signal_strength, atr_value, news_sentiment, trend_strength,
     # Signal strength factor (0-100% -> 0.5-1.5 multiplier)
     strength_factor = 0.5 + (signal_strength / 100) * 1.0
 
-    # ATR factor - higher volatility suggests larger moves (normalized ATR contribution)
-    # Assume ATR around 1-5 for XAUUSD, scale to 0.8-1.2
-    atr_factor = min(max(atr_value / 3.0, 0.8), 1.2) if atr_value and atr_value > 0 else 1.0
+    # Volatility factor. Phase 12 follow-up: this was ``atr_value / 3.0``,
+    # assuming "ATR around 1-5 for XAUUSD". With gold at $3,000-5,500 the M5
+    # ATR sits above 3 almost always, pinning the factor at its 1.2 cap -- a
+    # constant, not a signal. Volatility is now measured against its own
+    # recent median, which does not drift with the price level.
+    atr_factor = min(max(atr_ratio, 0.8), 1.2) if atr_ratio and atr_ratio > 0 else 1.0
 
     # News sentiment factor
     news_factor = 1.0
-    if news_sentiment == 'bullish':
+    # Phase 10 (H-05): callers pass the news DICT, which never equals a
+    # string. Normalise before comparing.
+    from utils.news_reader import sentiment_of
+    news_label = sentiment_of(news_sentiment)
+    if news_label == 'bullish':
         news_factor = 1.2 if position_type == 'BUY' else 0.9
-    elif news_sentiment == 'bearish':
+    elif news_label == 'bearish':
         news_factor = 1.2 if position_type == 'SELL' else 0.9
     # neutral = 1.0 (no change)
 
@@ -76,14 +91,14 @@ def dynamic_rr_ratio(signal_strength, atr_value, news_sentiment, trend_strength,
 
     return round(dynamic_rr, 2)
 
-def dynamic_stop_loss(signal_strength, atr_value, news_sentiment, trend_strength, rsi_condition, position_type, adx_value=None, volume_factor=1.0):
+def dynamic_stop_loss(signal_strength, atr_ratio, news_sentiment, trend_strength, rsi_condition, position_type, adx_value=None, volume_factor=1.0):
     """
     Calculate dynamic stop loss multiplier based on multiple market factors.
 
     Args:
         signal_strength (float): Signal strength percentage (0-100)
-        atr_value (float): Current ATR value for volatility assessment
-        news_sentiment (str): News sentiment ('bullish', 'bearish', 'neutral')
+        atr_ratio (float): current ATR / its recent median; 1.0 = normal
+        news_sentiment: dict or str ('bullish', 'bearish', 'neutral')
         trend_strength (int): Trend strength from EMA (-1=bearish, 0=neutral, 1=bullish)
         rsi_condition (str): RSI condition ('oversold', 'overbought', 'neutral')
         position_type (str): Position type ('BUY' or 'SELL')
@@ -97,12 +112,12 @@ def dynamic_stop_loss(signal_strength, atr_value, news_sentiment, trend_strength
     base_sl = 1.5
 
     # 1. Volatility (ATR) - Higher ATR = wider SL
+    # Relative to recent volatility, not absolute dollars (see dynamic_rr_ratio).
     atr_multiplier = 1.0
-    if atr_value and atr_value > 0:
-        # Normalize ATR: assume typical ATR range 1-5 for XAUUSD
-        if atr_value > 3.0:
+    if atr_ratio and atr_ratio > 0:
+        if atr_ratio > 1.3:
             atr_multiplier = 1.3  # High volatility
-        elif atr_value < 1.5:
+        elif atr_ratio < 0.75:
             atr_multiplier = 0.8  # Low volatility
         else:
             atr_multiplier = 1.0  # Normal volatility
@@ -138,8 +153,11 @@ def dynamic_stop_loss(signal_strength, atr_value, news_sentiment, trend_strength
     liquidity_multiplier = 1.0 / volume_factor  # Inverse relationship
 
     # 5. News / Sentiment Impact - High impact news = wider SL
+    # Phase 12 follow-up: callers pass the news DICT, which never equals a
+    # string -- the H-05 bug, still live here. Normalise first.
+    from utils.news_reader import sentiment_of
     news_multiplier = 1.0
-    if news_sentiment in ['bullish', 'bearish']:
+    if sentiment_of(news_sentiment) in ['bullish', 'bearish']:
         news_multiplier = 1.2  # Increase SL during news events
 
     # 6. RSI or Overbought/Oversold Conditions - Extreme RSI = wider SL for counter-trend
